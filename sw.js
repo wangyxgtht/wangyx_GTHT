@@ -7,7 +7,7 @@
  *   /api/*    → 直接放行，绝不缓存本地档案服务接口
  * CACHE_VERSION 与 index.html 的 ?v= 由 tools/bump_version.py 同步刷新，请勿手改。
  * =================================================================== */
-var CACHE_VERSION = '20261030c';
+var CACHE_VERSION = '20261030e';
 var CACHE_NAME = 'nav-app-' + CACHE_VERSION;
 var NAV_TIMEOUT = 3000;
 
@@ -18,16 +18,16 @@ var PRECACHE = [
   'manifest.webmanifest',
   'assets/icon.svg',
   'icons/apple-touch-icon.png',
-  'assets/style.css?v=20261030c',
+  'assets/style.css?v=20261030e',
   'lib/xlsx.full.min.js',
   'lib/echarts.min.js',
-  'assets/demo-data.js?v=20261030c',
-  'assets/parser.js?v=20261030c',
-  'assets/metrics.js?v=20261030c',
-  'assets/charts.js?v=20261030c',
-  'assets/archive.js?v=20261030c',
-  'assets/compare.js?v=20261030c',
-  'assets/ui.js?v=20261030c',
+  'assets/demo-data.js?v=20261030e',
+  'assets/parser.js?v=20261030e',
+  'assets/metrics.js?v=20261030e',
+  'assets/charts.js?v=20261030e',
+  'assets/archive.js?v=20261030e',
+  'assets/compare.js?v=20261030e',
+  'assets/ui.js?v=20261030e',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/icon-512-maskable.png'

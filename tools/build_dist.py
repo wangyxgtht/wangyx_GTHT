@@ -16,7 +16,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, 'dist')
 
-FILES = ['index.html', 'manifest.webmanifest', 'sw.js', '_headers']
+FILES = ['index.html', '404.html', 'manifest.webmanifest', 'sw.js', '_headers']
 DIRS = ['assets', 'lib', 'icons']
 
 # 明确禁止进入发布包的本地目录（防御性检查）

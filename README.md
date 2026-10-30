@@ -16,7 +16,7 @@
 | 本机服务 | 双击 `启动档案服务.bat` → `http://127.0.0.1:8791` | 项目内 `档案/` 文件夹 | 想留档到硬盘、要看 .md 快照 |
 | 在线版 | 手机/电脑浏览器打开线上地址 | 当前浏览器（IndexedDB） | 出差、手机随时看 |
 
-线上地址：`https://<你的项目名>.pages.dev`（部署后把这里替换成实际地址）
+**线上地址：<https://nav-excel.pages.dev>**（手机、电脑浏览器都可直接打开）
 
 ### 手机上用
 
@@ -48,41 +48,31 @@ excel解析/
 
 ---
 
-## 3. 首次部署（只需做一次）
+## 3. 线上部署（已完成，此处记录配置以便重建）
 
-### 3.1 推到 GitHub
+| 项目 | 值 |
+| --- | --- |
+| 线上地址 | <https://nav-excel.pages.dev> |
+| 平台 | Cloudflare Pages，项目名 `nav-excel`，生产分支 `main` |
+| 部署方式 | **Direct Upload**（命令行直接上传 `dist/`，不走 Git 自动构建） |
+| 账号 | wangyuxiang@gtht.com |
+| 授权方式 | `npx wrangler login`（一次即可，凭据存在 `%APPDATA%\xdg.config\.wrangler\`） |
+| 代码备份 | <https://github.com/wangyxgtht/wangyx_GTHT>（push 只做备份，不触发部署） |
 
-1. 打开 <https://github.com/new>，新建仓库（建议 **Private**），不要勾选任何初始化文件。
-2. 复制仓库地址，在本项目目录执行：
+之所以用 Direct Upload 而不用 Git 集成：一是控制台改版后入口难找，二是 Direct Upload 完全由本机命令完成，不依赖网页操作，改动发布一条命令就够；三是仍可精确控制上传内容（只有 `dist/`）。
+
+### 3.1 换电脑或重建项目
 
 ```bat
-git init
-git branch -M main
-git remote add origin https://github.com/你的账号/你的仓库名.git
-git add -A
-git commit -m "init: 净值分析台在线版"
-git push -u origin main
+npx wrangler login
+
+:: 项目不存在时才需要
+npx wrangler pages project create nav-excel --production-branch main
+
+npx wrangler pages deploy dist --project-name nav-excel --branch main
 ```
 
-> 首次 push 会弹出 GitHub 登录窗口，按提示授权即可。之后本机会记住凭据，`发布上线.bat` 不再需要登录。
-
-### 3.2 接到 Cloudflare Pages
-
-1. 打开 <https://dash.cloudflare.com/> → 左侧 **Workers & Pages** → **Create** → **Pages** → **Connect to Git**。
-2. 授权 GitHub，选中刚才的仓库，点 **Begin setup**。
-3. 填写：
-
-| 配置项 | 值 |
-| --- | --- |
-| Project name | 例如 `nav-excel`（决定网址 `nav-excel.pages.dev`） |
-| Production branch | `main` |
-| Framework preset | `None` |
-| Build command | `mkdir -p dist && cp index.html manifest.webmanifest sw.js _headers dist/ && cp -r assets lib icons dist/` |
-| Build output directory | `dist` |
-
-4. 点 **Save and Deploy**，等约 1 分钟，访问 `https://<项目名>.pages.dev`。
-
-> 国内访问 `*.pages.dev` 有时偏慢或被干扰。稳定做法是买一个自己的域名（无需备案，因为服务器在境外），在 Pages 项目 → **Custom domains** 里绑定，之后用自定义域名访问。
+> 国内访问 `*.pages.dev` 有时偏慢或被干扰。稳定做法是绑一个自己的域名（无需备案，服务器在境外），在 Pages 项目 → **Custom domains** 里添加即可。
 
 ---
 
@@ -91,18 +81,20 @@ git push -u origin main
 双击 **`发布上线.bat`**，它会依次：
 
 1. `tools/bump_version.py` —— 把 `index.html` 的 `?v=` 与 `sw.js` 的 `CACHE_VERSION` 刷成当天版本（同一天多次发布自动 a→b→c），并检查引用的文件是否都存在，**自检不过会中止**；
-2. `tools/build_dist.py` —— 重新生成 `dist/` 发布包；
-3. `git add / commit / push`。
-
-推上去之后 Cloudflare 自动构建，约 1 分钟线上就是新版。用户刷新页面即生效（页面走 network-first，不会卡在旧版本）。
+2. `tools/build_dist.py` —— 重新生成 `dist/` 发布包（只含站点文件）；
+3. `npx wrangler pages deploy dist` —— 上传到 Cloudflare Pages，几秒完成；
+4. `git add / commit / push` —— 同步到 GitHub 做备份。
 
 手动等价命令：
 
 ```bat
 py -3 tools/bump_version.py
 py -3 tools/build_dist.py
+npx wrangler pages deploy dist --project-name nav-excel --branch main --commit-dirty=true
 git add -A && git commit -m "update" && git push
 ```
+
+页面走 network-first，用户刷新即拿到新版，不会卡在旧缓存。
 
 ---
 

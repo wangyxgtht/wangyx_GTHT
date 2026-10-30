@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>页面不存在 · 净值分析台</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#16324F">
+<style>
+  :root {
+    --primary: #16324F;
+    --primary-2: #2E6FA7;
+    --ink: #12212F;
+    --ink-2: #4A5A6A;
+    --ink-3: #8A98A6;
+    --bg: #F6F8FA;
+    --line: #E3EAF1;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: grid; place-items: center;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    width: 100%; max-width: 420px;
+    padding: 40px 28px 34px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    box-shadow: 0 4px 18px rgba(16, 33, 51, .06), 0 1px 3px rgba(16, 33, 51, .04);
+    text-align: center;
+  }
+  .mark {
+    width: 52px; height: 52px;
+    margin: 0 auto 20px;
+    display: grid; place-items: center;
+    border-radius: 14px;
+    color: #fff;
+    background: linear-gradient(140deg, #23496F 0%, #16324F 55%, #0E2237 100%);
+    box-shadow: 0 8px 20px rgba(22, 50, 79, .26);
+  }
+  .code {
+    font-size: 46px; line-height: 1;
+    font-weight: 600;
+    letter-spacing: .02em;
+    color: var(--primary);
+    font-variant-numeric: tabular-nums;
+  }
+  h1 {
+    margin: 10px 0 8px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  p {
+    margin: 0 0 24px;
+    font-size: 12.5px;
+    line-height: 1.75;
+    color: var(--ink-2);
+  }
+  a.btn {
+    display: inline-block;
+    padding: 0 20px;
+    height: 40px;
+    line-height: 40px;
+    border-radius: 10px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 13px;
+    text-decoration: none;
+    box-shadow: 0 6px 16px rgba(22, 50, 79, .22);
+  }
+  a.btn:active { transform: translateY(1px); }
+  .foot {
+    margin: 18px 0 0;
+    padding-top: 16px;
+    border-top: 1px solid #F0F4F8;
+    font-size: 11.5px;
+    color: var(--ink-3);
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="mark">
+      <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 17.5 8.5 11l4 3.5L21 5.5"></path>
+        <path d="M21 11V5.5h-5.5"></path>
+      </svg>
+    </div>
+    <div class="code">404</div>
+    <h1>这个地址没有内容</h1>
+    <p>可能是链接过期，或者这里本来就不是公开文件。<br>净值分析台只在浏览器里跑，不对外提供文件下载。</p>
+    <a class="btn" href="/">回到净值分析台</a>
+    <p class="foot">全部解析与计算在你的浏览器内完成，文件不上传服务器</p>
+  </div>
+</body>
+</html>

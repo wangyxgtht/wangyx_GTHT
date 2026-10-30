@@ -4,7 +4,7 @@ cd /d "%~dp0"
 setlocal
 
 echo ==================================================
-echo   净值分析台 · 发布到线上
+echo   净值分析台 · 发布到线上（Cloudflare Pages）
 echo ==================================================
 echo.
 
@@ -18,22 +18,25 @@ py -3 tools/build_dist.py
 if errorlevel 1 goto fail
 
 echo.
-echo [3/4] 检查 Git 仓库...
-if not exist ".git" (
-  git init
-  git branch -M main
-)
-git remote get-url origin >nul 2>&1
+echo [3/4] 上传到 Cloudflare Pages...
+npx --yes wrangler@4 pages deploy dist --project-name nav-excel --branch main --commit-dirty=true
 if errorlevel 1 (
   echo.
-  echo 还没有配置远程仓库。请先在 GitHub 建好仓库，然后执行：
-  echo   git remote add origin https://github.com/你的账号/你的仓库名.git
-  echo 再重新运行本脚本。
+  echo 部署失败。若是登录过期，先运行： npx wrangler login
   goto fail
 )
 
 echo.
-echo [4/4] 提交并推送...
+echo [4/4] 备份到 GitHub...
+if not exist ".git" (
+  echo 未检测到 git 仓库，跳过。
+  goto done
+)
+git remote get-url origin >nul 2>&1
+if errorlevel 1 (
+  echo 未配置远程仓库，跳过。
+  goto done
+)
 git add -A
 git diff --cached --quiet
 if not errorlevel 1 (
@@ -47,11 +50,11 @@ if errorlevel 1 (
 ) else (
   git push
 )
-if errorlevel 1 goto fail
 
+:done
 echo.
-echo 推送完成。Cloudflare Pages 收到后会重新构建，约 1 分钟上线。
-echo 部署进度： https://dash.cloudflare.com/  ^>  Workers ^& Pages ^>  你的项目
+echo 完成。线上地址： https://nav-excel.pages.dev
+echo 手机若看着是旧版，下拉刷新或关掉再开一次即可。
 goto end
 
 :fail
