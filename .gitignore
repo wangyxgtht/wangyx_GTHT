@@ -30,3 +30,8 @@ desktop.ini
 .idea/
 *.swp
 .codebuddy/
+
+# wrangler 本地缓存（含账号信息，勿提交）
+.wrangler/
+.wrangler-dryrun/
+node_modules/
