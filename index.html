@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>净值分析台 · Excel 一键绩效分析</title>
+<meta name="description" content="拖入 Excel 即可生成净值走势图与年化、波动、最大回撤、夏普等绩效指标，支持基准对比与多产品业绩对比。全部解析与计算在浏览器内完成，文件不会上传。">
+<meta name="theme-color" content="#16324F">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="净值分析台">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/style.css?v=20261030c">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 17.5 8.5 11l4 3.5L21 5.5"></path><path d="M21 11V5.5h-5.5"></path>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <h1>净值分析台</h1>
+      <p>拖入 Excel，自动生成图表与年化、回撤等绩效指标</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <span class="privacy-chip" title="所有解析与计算均在浏览器内完成，文件不会上传到任何服务器">
+      <span class="dot"></span>文件不上传 · 本地计算
+    </span>
+    <button class="btn ghost install-btn" id="btnInstall" type="button" hidden>安装到桌面</button>
+    <button class="btn ghost" id="btnArchive" type="button">
+      档案<span class="count-badge" id="archCount" hidden>0</span>
+    </button>
+    <button class="btn ghost" id="btnCompare" type="button">业绩对比</button>
+    <button class="btn ghost" id="btnGlossary" type="button">指标口径</button>
+    <button class="btn ghost" id="btnExportCsv" type="button" disabled>导出 CSV</button>
+    <button class="btn primary" id="btnChangeFile" type="button" hidden>更换文件</button>
+  </div>
+</header>
+
+<main class="page">
+
+  <!-- ============ 空状态 ============ -->
+  <section id="emptyState" class="empty-wrap">
+    <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="选择或拖入 Excel 文件">
+      <div class="dz-glow" aria-hidden="true"></div>
+      <div class="dz-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 16V4"></path><path d="m7.5 8.5 4.5-4.5 4.5 4.5"></path>
+          <path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"></path>
+        </svg>
+      </div>
+      <h2>把 Excel 文件拖到这里</h2>
+      <p class="dz-sub">支持 <b>.xlsx</b> / <b>.xls</b> / <b>.csv</b>，自动识别表格结构，无需整理格式</p>
+      <div class="dz-formats">
+        <span class="fmt-pill"><i>宽表</i>日期 + 多列净值</span>
+        <span class="fmt-pill"><i>长表</i>产品 / 日期 / 净值</span>
+        <span class="fmt-pill"><i>单序列</i>日期 + 一条净值</span>
+      </div>
+      <div class="dz-actions">
+        <button class="btn primary lg" id="btnPick" type="button">选择文件</button>
+        <button class="btn ghost lg" id="btnDemo" type="button">先看演示数据</button>
+      </div>
+      <p class="dz-foot">文件只在你的浏览器里解析，不会上传到任何服务器</p>
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+    </div>
+
+    <div class="preview-grid">
+      <article class="preview-card">
+        <div class="pv-num">01</div>
+        <h4>结构自动识别</h4>
+        <p>自动跳过报表标题行、识别日期与净值列；识别偏了也能在右侧手动指定列，立刻重算。</p>
+      </article>
+      <article class="preview-card">
+        <div class="pv-num">02</div>
+        <h4>全套绩效指标</h4>
+        <p>累计与年化收益、年化波动、夏普、卡玛、索提诺、最大回撤及修复天数、区间与年度收益、VaR。</p>
+      </article>
+      <article class="preview-card">
+        <div class="pv-num">03</div>
+        <h4>基准对比</h4>
+        <p>再传一份基准（如沪深300）即可得到超额收益、超额年化与相对回撤，一眼看出超额稳定性。</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============ 结果状态 ============ -->
+  <section id="resultState" hidden>
+
+    <div class="filebar">
+      <div class="filebar-main">
+        <div class="file-ico" aria-hidden="true">X</div>
+        <div class="file-meta">
+          <strong id="fbName">—</strong>
+          <span id="fbInfo">—</span>
+        </div>
+      </div>
+      <div class="filebar-tags" id="fbTags"></div>
+    </div>
+
+    <div class="layout">
+      <div class="main-col">
+
+        <div class="kpi-grid" id="kpiGrid"></div>
+
+        <div class="card period-card">
+          <div class="card-head tight">
+            <h3>区间收益</h3>
+            <span class="card-hint">以最新净值为锚，取 ≤ 目标日的最后一个净值</span>
+          </div>
+          <div class="period-grid" id="periodGrid"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>净值走势</h3>
+            <div class="card-tools">
+              <span class="legend-note" id="navNote">起点归一为 1</span>
+              <button class="icon-btn" type="button" data-png="chartNav" title="导出 PNG">PNG</button>
+            </div>
+          </div>
+          <div class="chart" id="chartNav"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>回撤曲线</h3>
+            <div class="card-tools">
+              <span class="legend-note" id="ddNote">相对历史最高净值的跌幅</span>
+              <button class="icon-btn" type="button" data-png="chartDD" title="导出 PNG">PNG</button>
+            </div>
+          </div>
+          <div class="chart chart-sm" id="chartDD"></div>
+        </div>
+
+        <div class="duo">
+          <div class="card">
+            <div class="card-head">
+              <h3>年度收益</h3>
+              <div class="card-tools"><button class="icon-btn" type="button" data-png="chartAnnual" title="导出 PNG">PNG</button></div>
+            </div>
+            <div class="chart chart-sm" id="chartAnnual"></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>月度收益热力图</h3>
+              <div class="card-tools"><button class="icon-btn" type="button" data-png="chartHeat" title="导出 PNG">PNG</button></div>
+            </div>
+            <div class="chart chart-sm" id="chartHeat"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>指标明细</h3>
+            <span class="card-hint">无风险利率 <b id="rfEcho">2.00%</b> · 年化按 365 日历天</span>
+          </div>
+          <div class="detail-wrap">
+            <table class="detail-table" id="detailTable"></table>
+          </div>
+        </div>
+
+      </div>
+
+      <aside class="side-col">
+
+        <div class="card side-card">
+          <div class="card-head tight"><h3>数据映射</h3></div>
+          <div class="field">
+            <label for="selSheet">工作表</label>
+            <select id="selSheet"></select>
+          </div>
+          <div class="field">
+            <label for="selProduct">分析对象</label>
+            <select id="selProduct"></select>
+          </div>
+          <div class="field">
+            <label for="selDateCol">日期列</label>
+            <select id="selDateCol"></select>
+          </div>
+          <div class="field">
+            <label for="selNavCol">净值列</label>
+            <select id="selNavCol"></select>
+          </div>
+          <div class="field" id="selProdColWrap" hidden>
+            <label for="selProdCol">产品列</label>
+            <select id="selProdCol"></select>
+          </div>
+          <p class="side-note" id="mappingNote">自动识别结果如上，识别有误可手动更改。</p>
+        </div>
+
+        <div class="card side-card">
+          <div class="card-head tight"><h3>分析参数</h3></div>
+          <div class="field">
+            <label for="rngFrom">起始日期</label>
+            <input type="date" id="rngFrom">
+          </div>
+          <div class="field">
+            <label for="rngTo">结束日期</label>
+            <input type="date" id="rngTo">
+          </div>
+          <div class="field">
+            <label for="inpRf">无风险利率 <b id="rfVal">2.0%</b></label>
+            <input type="range" id="inpRf" min="0" max="10" step="0.1" value="2">
+          </div>
+          <button class="btn ghost full" id="btnResetRange" type="button">重置区间</button>
+        </div>
+
+        <div class="card side-card">
+          <div class="card-head tight"><h3>基准对比</h3></div>
+          <div class="bench-drop" id="benchDrop" tabindex="0" role="button">
+            <span class="bench-plus" aria-hidden="true">+</span>
+            <span id="benchText">上传基准序列（Excel / CSV）</span>
+            <input type="file" id="benchInput" accept=".xlsx,.xls,.csv" hidden>
+          </div>
+          <div class="bench-result" id="benchResult" hidden></div>
+          <button class="btn ghost full" id="btnClearBench" type="button" hidden>移除基准</button>
+          <p class="side-note">按共同日期交集对齐后重算，超额年化为复利差值口径。</p>
+        </div>
+
+        <div class="card side-card">
+          <div class="card-head tight">
+            <h3>本地存档</h3>
+            <span class="chip" id="archMode">检测中</span>
+          </div>
+          <p class="arch-hint" id="archHint">正在检测本地档案服务…</p>
+          <div class="arch-last" id="archLast" hidden>
+            <span class="arch-dot" aria-hidden="true"></span>
+            <span id="archLastText">—</span>
+          </div>
+          <div class="side-btns">
+            <button class="btn ghost full" id="btnArchList" type="button">查看档案</button>
+            <button class="btn ghost full" id="btnArchZip" type="button">打包导出全部</button>
+          </div>
+          <p class="side-note arch-path" id="archPath" hidden></p>
+        </div>
+
+        <div class="card side-card">
+          <div class="card-head tight"><h3>导出</h3></div>
+          <div class="side-btns">
+            <button class="btn ghost full" id="btnExportCsv2" type="button">导出指标 CSV</button>
+            <button class="btn ghost full" id="btnCopySummary" type="button">复制文字摘要</button>
+            <button class="btn ghost full" id="btnExportSeries" type="button">导出净值序列 CSV</button>
+          </div>
+        </div>
+
+      </aside>
+    </div>
+  </section>
+</main>
+
+<!-- ============ 业绩对比视图 ============ -->
+<section id="compareState" class="cmp-page" hidden>
+  <div class="cmp-layout">
+
+    <aside class="card cmp-side">
+      <div class="card-head tight">
+        <h3>对比对象</h3>
+        <span class="chip" id="cmpCount">0 / 6</span>
+      </div>
+      <div class="cmp-search">
+        <input type="search" id="cmpSearch" placeholder="搜索档案名 / 产品名">
+      </div>
+      <div class="cmp-list" id="cmpList"></div>
+      <p class="side-note">勾选 2~6 份档案；每份档案可下拉切换成里面的其他产品。</p>
+    </aside>
+
+    <div class="cmp-main">
+      <div class="card cmp-bar">
+        <div class="cmp-bar-info">
+          <strong id="cmpSummary">尚未选择</strong>
+          <span id="cmpSub">从左侧勾选档案开始</span>
+        </div>
+        <div class="cmp-bar-tools">
+          <div class="seg" id="cmpAlign">
+            <button type="button" class="seg-btn is-on" data-align="common">共同区间归一</button>
+            <button type="button" class="seg-btn" data-align="own">各自起点</button>
+          </div>
+          <label class="cmp-inline" for="cmpBase">超额基线
+            <select id="cmpBase">
+              <option value="first">第一只产品</option>
+              <option value="bench">已有基准</option>
+            </select>
+          </label>
+          <label class="cmp-inline" for="cmpRf">无风险利率
+            <span class="cmp-rf">
+              <input type="number" id="cmpRf" min="0" max="20" step="0.1" value="2" aria-label="无风险利率">
+              <i>%</i>
+            </span>
+          </label>
+          <button class="btn ghost sm" id="cmpClear" type="button">清空</button>
+        </div>
+      </div>
+
+      <div class="cmp-warn" id="cmpWarn" hidden></div>
+
+      <div class="card cmp-empty" id="cmpEmpty">
+        <div class="cmp-empty-inner">
+          <h4 id="cmpEmptyTitle">从左侧勾选 2 只以上产品开始对比</h4>
+          <p id="cmpEmptyText">对比数据来自「档案」里已存档的 Excel；每份档案可挑一只产品。</p>
+          <div class="cmp-empty-acts">
+            <button class="btn ghost sm" id="cmpGoAnalyze" type="button">先去分析并存档</button>
+            <button class="btn ghost sm" id="cmpOpenArchive" type="button">打开档案列表</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="cmpResult" hidden>
+        <div class="card">
+          <div class="card-head">
+            <h3>净值走势对比</h3>
+            <span class="card-hint" id="cmpNavNote">起点归一为 1</span>
+          </div>
+          <div class="chart chart-lg" id="cmpChartNav"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>指标横向对比</h3>
+            <span class="card-hint">按年化收益排序，各列最优已标出</span>
+          </div>
+          <div class="cmp-table-wrap">
+            <table class="cmp-table" id="cmpTable"></table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>区间收益对比</h3>
+            <span class="card-hint">各自最新净值为锚</span>
+          </div>
+          <div class="chart chart-sm" id="cmpChartPeriod"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>超额走势</h3>
+            <span class="card-hint" id="cmpExcessNote">—</span>
+          </div>
+          <div class="chart chart-sm" id="cmpChartExcess"></div>
+        </div>
+
+        <div class="duo">
+          <div class="card">
+            <div class="card-head">
+              <h3>相关性矩阵</h3>
+              <span class="card-hint" id="cmpCorrNote">期收益 Pearson</span>
+            </div>
+            <div class="chart chart-sm" id="cmpChartCorr"></div>
+            <div class="cmp-chart-empty" id="cmpCorrEmpty" hidden>
+              各自起点模式下各产品日期不一致，无法计算相关性<br>切换到「共同区间归一」即可查看
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>月度收益对比</h3>
+              <span class="card-hint">红涨绿跌 · 近 18 个月</span>
+            </div>
+            <div class="chart chart-sm" id="cmpChartHeat"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="page-foot">
+  <span>净值分析台 · 纯前端实现（SheetJS + ECharts），全部计算在你的浏览器内完成，文件不上传服务器</span>
+  <span id="footStat"></span>
+</footer>
+
+<!-- 拖拽遮罩 -->
+<div class="drag-overlay" id="dragOverlay" hidden>
+  <div class="drag-overlay-inner">
+    <div class="dz-icon"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"></path><path d="m7.5 8.5 4.5-4.5 4.5 4.5"></path><path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"></path></svg></div>
+    <p>松手即可解析</p>
+  </div>
+</div>
+
+<!-- 解析进度 -->
+<div class="busy" id="busy" hidden>
+  <div class="busy-card">
+    <div class="busy-bar"><i></i></div>
+    <p id="busyText">正在识别表头…</p>
+  </div>
+</div>
+
+<!-- 指标口径抽屉 -->
+<div class="drawer-mask" id="glossary" hidden>
+  <div class="drawer" role="dialog" aria-modal="true" aria-label="指标口径">
+    <div class="drawer-head">
+      <h3>指标口径</h3>
+      <button class="icon-btn" id="btnCloseGlossary" type="button">关闭</button>
+    </div>
+    <div class="drawer-body" id="glossaryBody"></div>
+  </div>
+</div>
+
+<!-- 档案抽屉 -->
+<div class="drawer-mask" id="archive" hidden>
+  <div class="drawer drawer-wide" role="dialog" aria-modal="true" aria-label="本地档案">
+    <div class="drawer-head">
+      <h3>本地档案 <span class="chip" id="archDrawerMode">—</span></h3>
+      <button class="icon-btn" id="btnCloseArchive" type="button">关闭</button>
+    </div>
+    <div class="drawer-body">
+      <div id="archListWrap">
+        <div class="arch-tools">
+          <button class="btn ghost sm" id="btnRefreshArch" type="button">刷新</button>
+          <button class="btn ghost sm" id="btnOpenFolder" type="button" hidden>打开档案文件夹</button>
+          <button class="btn ghost sm" id="btnMigrate" type="button" hidden>迁移暂存到本机</button>
+          <span class="arch-count" id="archListCount"></span>
+        </div>
+        <p class="arch-sub" id="archSub">—</p>
+        <div class="arch-list" id="archList"></div>
+      </div>
+      <div id="archSnapView" hidden>
+        <button class="btn ghost sm" id="btnBackArch" type="button">← 返回档案列表</button>
+        <pre class="arch-snap" id="archSnapText"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="lib/xlsx.full.min.js"></script>
+<script src="lib/echarts.min.js"></script>
+<script src="assets/demo-data.js?v=20261030c"></script>
+<script src="assets/parser.js?v=20261030c"></script>
+<script src="assets/metrics.js?v=20261030c"></script>
+<script src="assets/charts.js?v=20261030c"></script>
+<script src="assets/archive.js?v=20261030c"></script>
+<script src="assets/compare.js?v=20261030c"></script>
+<script src="assets/ui.js?v=20261030c"></script>
+<script>
+/* 离线缓存：仅在线（https）形态注册，本机 file:// 与 127.0.0.1 调试时不注册，避免改文件后被缓存挡住 */
+(function () {
+  var h = (location.hostname || '').toLowerCase();
+  var isLocal = location.protocol === 'file:' || h === 'localhost' || h === '127.0.0.1'
+    || h === '[::1]' || h === '' || /^192\.168\./.test(h) || /^10\./.test(h);
+  if (isLocal || !('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').then(function (reg) {
+      reg.update();
+    }).catch(function () { /* 缓存不可用不影响主流程 */ });
+  });
+})();
+</script>
+</body>
+</html>

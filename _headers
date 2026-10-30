@@ -1,0 +1,26 @@
+# Cloudflare Pages 缓存头（本地使用无影响）
+# 入口与 SW 必须实时校验，避免用户卡在旧版本
+/
+  Cache-Control: no-cache
+  X-Content-Type-Options: nosniff
+
+/index.html
+  Cache-Control: no-cache
+  X-Content-Type-Options: nosniff
+
+/sw.js
+  Cache-Control: no-cache
+  Service-Worker-Allowed: /
+
+/manifest.webmanifest
+  Content-Type: application/manifest+json
+  Cache-Control: no-cache
+
+/assets/*
+  Cache-Control: public, max-age=3600
+
+/lib/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/icons/*
+  Cache-Control: public, max-age=31536000, immutable

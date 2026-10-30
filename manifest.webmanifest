@@ -1,0 +1,35 @@
+{
+  "name": "净值分析台 · Excel 绩效分析",
+  "short_name": "净值分析台",
+  "description": "拖入 Excel，自动生成净值走势图与年化、回撤等绩效指标。全部解析与计算都在浏览器内完成，文件不会上传。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "./?src=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#F6F8FA",
+  "theme_color": "#16324F",
+  "categories": ["finance", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
