@@ -115,6 +115,39 @@
     return { ts: ts, nav: nav, cum: cum };
   }
 
+  /* 组合：成员日期取精确交集，权重按和归一，期初权重、期间不再平衡
+     members: [{ series:{ts,nav}, weight }]
+     -> { ts, nav, labels, used, sum } | null（成员不足 2 只 / 无共同日期 / 权重无效） */
+  function portfolioSeries(members) {
+    var list = (members || []).filter(function (m) {
+      return m && m.series && m.series.ts && m.series.ts.length && (+m.weight > 0);
+    });
+    if (list.length < 2) return null;
+
+    var sum = 0;
+    list.forEach(function (m) { sum += (+m.weight || 0); });
+    if (!(sum > 0)) return null;
+
+    var dates = intersect(list);
+    if (dates.length < 2) return null;
+
+    var nav = new Array(dates.length);
+    for (var i = 0; i < dates.length; i++) nav[i] = 0;
+
+    var used = 0, labels = [];
+    list.forEach(function (m) {
+      var map = navMap(m.series);
+      var base = map[dates[0]];
+      var w = (+m.weight || 0) / sum;
+      if (!(base > 0) || !(w > 0)) return;
+      used++;
+      labels.push(m.name || '');
+      for (var j = 0; j < dates.length; j++) nav[j] += w * (map[dates[j]] / base);
+    });
+    if (used < 2) return null;
+    return { ts: dates, nav: nav, labels: labels, used: used, sum: sum };
+  }
+
   /* 产品：日期都在交集里，直接取值 */
   function exactOn(dates, series) {
     var map = navMap(series), ts = [], nav = [];
@@ -442,6 +475,7 @@
     loadArchive: loadArchive,
     clearCache: clearCache,
     recKey: recKey,
+    portfolioSeries: portfolioSeries,
     build: build
   };
 })(window);

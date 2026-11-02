@@ -1108,6 +1108,138 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.12); }
 }
 .cmp-pf-warn { font-size: 10.5px; color: #B07A0E; }
 
+/* ================= 组合（分析页数据源） ================= */
+.combo-sub { margin: 0 0 10px; font-size: 11.5px; color: var(--ink-3); line-height: 1.65; }
+.combo-sub b { color: var(--ink-2); font-weight: 600; }
+.combo-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+  gap: 18px;
+  align-items: start;
+}
+.combo-col { min-width: 0; }
+.combo-col-weight {
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+.combo-pick { display: flex; flex-direction: column; gap: 4px; }
+.combo-group {
+  margin: 10px 0 2px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+  letter-spacing: .06em;
+}
+.combo-prod {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background .15s var(--ease), border-color .15s var(--ease);
+}
+.combo-prod:hover { border-color: var(--primary-3); }
+.combo-prod.on {
+  background: #EAF2FA;
+  border-color: #C9DEF0;
+  box-shadow: inset 2px 0 0 var(--primary-2);
+}
+.combo-prod input { flex: none; cursor: pointer; }
+.combo-prod-name {
+  flex: 1; min-width: 0;
+  font-size: 12px; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.combo-prod-meta {
+  flex: none;
+  font-size: 10.5px; color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.combo-arch {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 340px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding-right: 2px;
+}
+.combo-arch::-webkit-scrollbar { width: 6px; }
+.combo-arch::-webkit-scrollbar-thumb { background: #D2DEE9; border-radius: 99px; }
+.combo-arch-item {
+  padding: 6px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #FCFDFE;
+}
+.combo-arch-head { display: flex; align-items: center; gap: 8px; }
+.combo-arch-name {
+  flex: 1; min-width: 0;
+  font-size: 11.5px; color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.combo-arch-body { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.combo-arch-body:empty { display: none; }
+.combo-weight-box { min-width: 0; }
+.combo-weight-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 6px;
+}
+.combo-weight-head h4 {
+  margin: 0;
+  font-size: 11.5px; font-weight: 600; color: var(--ink-2);
+  letter-spacing: .02em;
+}
+.combo-weight-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 220px; overflow-y: auto;
+  scrollbar-width: thin;
+}
+.combo-weight-list::-webkit-scrollbar { width: 6px; }
+.combo-weight-list::-webkit-scrollbar-thumb { background: #D2DEE9; border-radius: 99px; }
+.combo-weigh { display: flex; align-items: center; gap: 8px; }
+.combo-weigh-name {
+  flex: 1; min-width: 0;
+  font-size: 11.5px; color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.combo-weigh-input { display: flex; align-items: center; gap: 3px; flex: none; }
+.combo-weigh-input input {
+  width: 56px; height: 24px;
+  padding: 0 6px;
+  font: inherit; font-size: 11.5px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  outline: none;
+  background: #fff;
+}
+.combo-weigh-input input:focus {
+  border-color: var(--primary-3);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+.combo-weigh-pct { font-size: 11px; color: var(--ink-3); }
+.combo-sum {
+  margin: 8px 0 0;
+  font-size: 11px; color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.combo-sum.warn { color: #B07A0E; font-weight: 600; }
+.combo-foot {
+  position: sticky;
+  bottom: 0;
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 8px; margin-top: 14px;
+  padding: 12px 0 6px;
+  background: linear-gradient(to top, #fff 72%, rgba(255, 255, 255, 0));
+}
+.tag.combo-tag {
+  background: #EAF2FA;
+  border-color: #C9DEF0;
+  color: var(--primary-2);
+  font-weight: 600;
+}
+
 /* 对比页 · 内置指数区 */
 .cmp-index-box {
   margin-top: 10px;
@@ -1519,6 +1651,21 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.12); }
   /* 表格类内容允许横向滑动，避免撑破视口 */
   .card { min-width: 0; }
   .cmp-table-wrap { -webkit-overflow-scrolling: touch; }
+
+  /* 组合抽屉：单列堆叠、权重行改两行、底部按钮铺满 */
+  .combo-cols { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .combo-col-weight {
+    padding-left: 0;
+    border-left: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .combo-arch { max-height: 240px; }
+  .combo-weigh { flex-wrap: wrap; }
+  .combo-weigh-name { flex: 1 1 100%; }
+  .combo-prod-meta { display: none; }
+  .combo-foot { flex-direction: column-reverse; }
+  .combo-foot .btn { width: 100%; }
 }
 
 @media (max-width: 420px) {

@@ -39,7 +39,9 @@
     archiveMode: 'none',
     recentCount: 0,
     recentRows: [],
-    lastArchive: null
+    lastArchive: null,
+    combo: null,        // 当前是否在看组合：{ name, members, weightText, sum, builtAt }
+    comboFrom: null     // 进入组合前的数据源快照，用于「退出组合」
   };
 
   function $(id) { return document.getElementById(id); }
@@ -135,14 +137,24 @@
     reader.readAsArrayBuffer(file);
   }
 
-  function applyParsed(parsed, isDemo) {
+  function applyParsed(parsed, isDemo, opts) {
+    opts = opts || {};
     clearMemSource(true);   // 换文件后旧的「本次文件」数据源作废
     state.fileName = parsed.fileName || '未命名文件';
     state.sheets = parsed.sheets || [];
     state.demo = !!isDemo;
-    state.override = {};
-    state.productIdx = 0;
+    state.override = opts.override || {};
+    state.productIdx = opts.productIdx || 0;
     state.styleExp = null;
+    if (!opts.combo) {
+      // 换文件（不是进入组合）就退出组合态，并清空抽屉里的旧选择
+      state.combo = null;
+      state.comboFrom = null;
+      comboUI.sel = [];
+      comboUI.weights = {};
+      comboUI.touched = {};
+      comboUI.expanded = {};
+    }
     // 换文件后预览表回到折叠态，避免旧表格误导
     if ($('previewBody')) {
       $('previewBody').hidden = true;
@@ -153,11 +165,13 @@
     }
     state.from = null;
     state.to = null;
-    state.benchmark = null;
-    state.benchName = '';
-    state.benchCode = '';
-    state.benchTr = false;
-    state.benchSource = 'none';
+    if (!opts.keepBench) {
+      state.benchmark = null;
+      state.benchName = '';
+      state.benchCode = '';
+      state.benchTr = false;
+      state.benchSource = 'none';
+    }
     state.benchM = null;
     state.prodAlignM = null;
     state.alignPoints = 0;
@@ -167,10 +181,20 @@
     state.alignStart = null;
     state.alignEnd = null;
 
+    // 优先试指定工作表（退出组合时精确还原），失败再按顺序找
+    var order = [];
+    if (opts.sheetIdx !== undefined && opts.sheetIdx !== null
+      && opts.sheetIdx >= 0 && opts.sheetIdx < state.sheets.length) {
+      order.push(opts.sheetIdx);
+    }
+    for (var s = 0; s < state.sheets.length; s++) {
+      if (order.indexOf(s) < 0) order.push(s);
+    }
+
     var picked = -1, firstRes = null;
-    for (var i = 0; i < state.sheets.length; i++) {
-      var r = P.analyze(state.sheets[i].rows, {});
-      if (r.ok) { picked = i; firstRes = r; break; }
+    for (var k = 0; k < order.length; k++) {
+      var r = P.analyze(state.sheets[order[k]].rows, state.override);
+      if (r.ok) { picked = order[k]; firstRes = r; break; }
       if (!firstRes) firstRes = r;
     }
     if (picked < 0) {
@@ -181,6 +205,7 @@
     }
     state.sheetIdx = picked;
     state.result = firstRes;
+    if (opts.combo) state.combo = opts.combo;
 
     showView('analyze');
     $('btnChangeFile').hidden = false;
@@ -225,6 +250,11 @@
   function renderMapping() {
     var res = state.result;
     if (!res) return;
+
+    // 组合没有原始列可改，映射卡整块收起
+    var isCombo = !!state.combo;
+    if ($('mappingCard')) $('mappingCard').hidden = isCombo;
+    if (isCombo) { renderFilebar(); return; }
 
     // 工作表
     var sheetItems = state.sheets.map(function (s, i) { return { value: i, label: s.name }; });
@@ -276,6 +306,12 @@
     var res = state.result;
     if (!res) return;
     var p = res.products[state.productIdx] || res.products[0];
+
+    if (state.combo) {
+      renderComboFilebar(p);
+      return;
+    }
+
     $('fbName').textContent = state.fileName;
     $('fbInfo').textContent = '工作表「' + state.sheets[state.sheetIdx].name + '」· '
       + p.name + ' · ' + dstr(p.ts[0]) + ' 至 ' + dstr(p.ts[p.ts.length - 1]);
@@ -306,6 +342,40 @@
       cbtn.addEventListener('click', compareCurrentFile);
       tags.appendChild(cbtn);
     }
+  }
+
+  /* 组合态的文件栏：名称、成员权重、口径与三个动作 */
+  function renderComboFilebar(p) {
+    var c = state.combo;
+    $('fbName').textContent = c.name;
+    var w = c.members.map(function (m) {
+      return shortLabel(m.name, 10) + ' ' + comboPctText(m.weightPct);
+    }).join(' · ');
+    $('fbInfo').textContent = w + ' · ' + dstr(p.ts[0]) + ' 至 ' + dstr(p.ts[p.ts.length - 1])
+      + ' · 期初权重，期间不再平衡';
+
+    var tags = $('fbTags');
+    tags.innerHTML = '';
+    tags.appendChild(el('span', 'tag combo-tag', '组合'));
+    var t2 = el('span', 'tag');
+    t2.innerHTML = '成员 <b>' + c.members.length + '</b> 只';
+    tags.appendChild(t2);
+    var t3 = el('span', 'tag');
+    t3.innerHTML = '观测 <b>' + p.count + '</b> 点';
+    tags.appendChild(t3);
+
+    function ghost(label, title, fn) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn ghost sm fb-cmp-btn';
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener('click', fn);
+      return b;
+    }
+    tags.appendChild(ghost('调整组合', '改成员或权重后重新合成', adjustCombo));
+    tags.appendChild(ghost('带入对比页', '把这些成员放进业绩对比并生成同权重组合线', comboToCompare));
+    tags.appendChild(ghost('退出组合', '回到进入组合前的文件', exitCombo));
   }
 
   /* ---------------- 主渲染 ---------------- */
@@ -512,7 +582,8 @@
     var card = $('previewCard'), body = $('previewBody'), table = $('previewTable');
     var note = $('previewNote');
     if (!card || !body || !table) return;
-    if (!state.result || !state.sheets.length) { card.hidden = true; return; }
+    // 组合是合成出来的序列，没有原始行可预览
+    if (!state.result || !state.sheets.length || state.combo) { card.hidden = true; return; }
     card.hidden = false;
     if (body.hidden) return;                    // 折叠时不动 DOM，避免输入失焦
 
@@ -1285,6 +1356,8 @@
 
   /* ---------------- 导出 ---------------- */
   function download(name, content, mime) {
+    // 组合名里含 ·、%、成员名，先净化再下载，避免个别系统上失败
+    name = String(name).replace(/[\\/:*?"<>|\r\n]/g, '_');
     var blob = new Blob([content], { type: mime || 'text/plain;charset=utf-8' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -1782,6 +1855,408 @@
     });
   }
 
+  /* ---------------- 组合（分析页数据源） ----------------
+     把多只产品按「初始资金比例」合成一条净值，再伪装成单列净值表交给 applyParsed，
+     下游指标、回撤明细、基准、风格暴露、导出都不用另写一套。 */
+  var comboUI = {
+    open: false,
+    sel: [],          // [{ key, name, series, scope, rec, productIdx, count }]
+    weights: {},
+    touched: {},
+    expanded: {}      // 档案 recKey -> 已读取产品
+  };
+
+  function comboWeight(key) {
+    var v = comboUI.weights[key];
+    return (isFinite(v) && v > 0) ? v : 0;
+  }
+
+  function comboSum() {
+    var s = 0;
+    comboUI.sel.forEach(function (m) { s += comboWeight(m.key); });
+    return s;
+  }
+
+  /* 当前文件的产品（进入组合前的那份文件）+ 档案 */
+  function comboCandidates() {
+    var src = state.combo ? (state.comboFrom && state.comboFrom.res) : state.result;
+    var out = [];
+    if (src && src.products) {
+      src.products.forEach(function (p, i) {
+        out.push({
+          key: 'cb-file#' + i, scope: 'file', name: p.name,
+          series: { ts: p.ts.slice(), nav: p.nav.slice() }, count: p.count
+        });
+      });
+    }
+    return out;
+  }
+
+  function comboIndexOf(key) {
+    for (var i = 0; i < comboUI.sel.length; i++) {
+      if (comboUI.sel[i].key === key) return i;
+    }
+    return -1;
+  }
+
+  function comboEven() {
+    var n = comboUI.sel.length;
+    if (!n) return;
+    var even = Math.round(1000 / n) / 10;
+    comboUI.sel.forEach(function (m) {
+      if (!comboUI.touched[m.key]) comboUI.weights[m.key] = even;
+    });
+  }
+
+  function comboRow(c) {
+    var on = comboIndexOf(c.key) >= 0;
+    var row = el('label', 'combo-prod' + (on ? ' on' : ''));
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = on;
+    cb.addEventListener('change', function () {
+      var i = comboIndexOf(c.key);
+      if (cb.checked && i < 0) {
+        // 同一只产品可能被重复上传到多个档案里：只让它进组合一次
+        var dup = comboUI.sel.filter(function (m) { return m.name === c.name; })[0];
+        if (dup) {
+          cb.checked = false;
+          row.classList.remove('on');
+          toast('「' + shortLabel(c.name, 14) + '」已在组合里，同一只产品只算一次');
+          return;
+        }
+        comboUI.sel.push(c);
+      } else if (!cb.checked && i >= 0) {
+        comboUI.sel.splice(i, 1);
+        delete comboUI.weights[c.key];
+        delete comboUI.touched[c.key];
+      }
+      row.classList.toggle('on', cb.checked);
+      comboEven();
+      renderComboWeights();
+      updateComboPickCount();
+    });
+    row.appendChild(cb);
+    var nm = el('span', 'combo-prod-name', c.name);
+    nm.title = c.name;
+    row.appendChild(nm);
+    row.appendChild(el('span', 'combo-prod-meta', c.count + ' 点'));
+    return row;
+  }
+
+  function updateComboPickCount() {
+    var c = $('comboPickCount');
+    if (c) c.textContent = '已选 ' + comboUI.sel.length + ' 只';
+  }
+
+  function renderComboPick() {
+    var box = $('comboPick');
+    if (!box) return;
+    box.innerHTML = '';
+    updateComboPickCount();
+
+    box.appendChild(el('div', 'combo-group', '当前文件'));
+    var cur = comboCandidates();
+    if (!cur.length) {
+      box.appendChild(el('p', 'arch-empty', state.combo
+        ? '当前正在看组合，成员来自下方档案与合成前的原文件'
+        : '还没有载入文件；可以直接用下方档案里的产品合成'));
+    } else {
+      cur.forEach(function (c) { box.appendChild(comboRow(c)); });
+    }
+
+    box.appendChild(el('div', 'combo-group', '档案'));
+    var wrap = el('div', 'combo-arch');
+    box.appendChild(wrap);
+    wrap.appendChild(el('p', 'arch-empty', '正在读取档案…'));
+
+    if (!AR) { wrap.innerHTML = '<p class="arch-empty">档案模块未加载</p>'; return; }
+    AR.list().then(function (rows) {
+      wrap.innerHTML = '';
+      var recs = (rows || []).filter(function (r) { return r.kind !== 'snapshot'; });
+      if (!recs.length) { wrap.appendChild(el('p', 'arch-empty', '还没有可用档案')); return; }
+      recs.forEach(function (rec) {
+        var key = cmpKey(rec);
+        var item = el('div', 'combo-arch-item');
+        var head = el('div', 'combo-arch-head');
+        head.appendChild(el('span', 'combo-arch-name', rec.displayName || rec.name));
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn ghost sm';
+        head.appendChild(btn);
+        item.appendChild(head);
+        var body = el('div', 'combo-arch-body');
+        item.appendChild(body);
+        wrap.appendChild(item);
+
+        function fillProducts() {
+          var L = cmp.loaded[key];
+          body.innerHTML = '';
+          if (!L) { body.appendChild(el('p', 'arch-empty', '正在识别产品…')); return; }
+          if (!L.ok) { body.appendChild(el('p', 'arch-empty', '解析失败：' + (L.error || '未知原因'))); return; }
+          L.products.forEach(function (p, idx) {
+            body.appendChild(comboRow({
+              key: 'cb-' + key + '#' + idx, scope: 'archive', name: p.name,
+              series: { ts: p.ts.slice(), nav: p.nav.slice() }, count: p.count,
+              rec: rec, productIdx: idx
+            }));
+          });
+        }
+
+        btn.addEventListener('click', function () {
+          if (comboUI.expanded[key]) {
+            comboUI.expanded[key] = false;
+            body.innerHTML = '';
+            btn.textContent = '读取产品';
+            return;
+          }
+          comboUI.expanded[key] = true;
+          btn.textContent = '收起';
+          fillProducts();
+          ensureCmpLoaded(rec).then(function () {
+            if (comboUI.expanded[key]) fillProducts();
+          }).catch(function (e) {
+            body.innerHTML = '<p class="arch-empty">读取失败：' + esc(e && e.message ? e.message : e) + '</p>';
+          });
+        });
+
+        btn.textContent = '读取产品';
+        if (comboUI.expanded[key]) {
+          btn.textContent = '收起';
+          fillProducts();
+          ensureCmpLoaded(rec).then(fillProducts);
+        }
+      });
+    }).catch(function (e) {
+      wrap.innerHTML = '<p class="arch-empty">读取档案失败：' + esc(e && e.message ? e.message : e) + '</p>';
+    });
+  }
+
+  function renderComboWeights() {
+    var box = $('comboWeightList');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!comboUI.sel.length) {
+      box.appendChild(el('p', 'arch-empty', '先在上方勾选产品，再配初始资金比例'));
+      updateComboSum();
+      return;
+    }
+    comboUI.sel.forEach(function (m) {
+      var row = el('div', 'combo-weigh');
+      var nm = el('span', 'combo-weigh-name', m.name);
+      nm.title = m.name;
+      row.appendChild(nm);
+      var wrap = el('span', 'combo-weigh-input');
+      var inp = document.createElement('input');
+      inp.type = 'number';
+      inp.min = '0';
+      inp.max = '100';
+      inp.step = '5';
+      inp.value = String(Math.round(comboWeight(m.key) * 10) / 10);
+      inp.addEventListener('input', function () {
+        var v = parseFloat(inp.value);
+        comboUI.weights[m.key] = isFinite(v) && v > 0 ? v : 0;
+        comboUI.touched[m.key] = true;
+        updateComboSum();
+      });
+      wrap.appendChild(inp);
+      wrap.appendChild(el('span', 'combo-weigh-pct', '%'));
+      row.appendChild(wrap);
+      box.appendChild(row);
+    });
+    updateComboSum();
+  }
+
+  function updateComboSum() {
+    var box = $('comboSum');
+    if (!box) return;
+    if (!comboUI.sel.length) {
+      box.textContent = '合计 —';
+      box.className = 'combo-sum';
+      return;
+    }
+    var s = comboSum();
+    var off = Math.abs(s - 100) > 0.05;
+    box.textContent = '合计 ' + (Math.round(s * 10) / 10) + '%'
+      + (off ? ' → 生成时归一为 100%' : '');
+    box.className = 'combo-sum' + (off ? ' warn' : '');
+  }
+
+  function comboPctText(v) {
+    var r = Math.round(v * 10) / 10;
+    return (r % 1 === 0 ? String(Math.round(r)) : r.toFixed(1)) + '%';
+  }
+
+  function comboName(list) {
+    var sum = comboSum() || 1;
+    if (list.length === 2) {
+      return '组合 · ' + shortLabel(list[0].name, 8) + ' ' + comboPctText(comboWeight(list[0].key) / sum * 100)
+        + ' + ' + shortLabel(list[1].name, 8) + ' ' + comboPctText(comboWeight(list[1].key) / sum * 100);
+    }
+    return '组合 · ' + list.length + ' 只（' + shortLabel(list[0].name, 6) + ' 等）';
+  }
+
+  function openCombo() {
+    var box = $('comboDrawer');
+    if (!box) return;
+    comboUI.open = true;
+    box.hidden = false;
+    if (!comboUI.sel.length) comboEven();
+    renderComboPick();
+    renderComboWeights();
+  }
+
+  function closeCombo() {
+    comboUI.open = false;
+    var box = $('comboDrawer');
+    if (box) box.hidden = true;
+  }
+
+  /* 生成：pf 已合成好，meta 带成员与口径说明 */
+  function applyCombo(pf, meta) {
+    var rows = [['净值日期', meta.name]];
+    for (var i = 0; i < pf.ts.length; i++) {
+      rows.push([dstr(pf.ts[i]), Math.round(pf.nav[i] * 1e6) / 1e6]);
+    }
+    var parsed = { fileName: meta.name, sheets: [{ name: '组合合成', rows: rows }] };
+    enterCombo(parsed, meta);
+  }
+
+  function enterCombo(parsed, meta) {
+    if (!state.combo) {
+      state.comboFrom = {
+        fileName: state.fileName, sheets: state.sheets, demo: state.demo,
+        sheetIdx: state.sheetIdx, productIdx: state.productIdx,
+        override: state.override, lastArchive: state.lastArchive, res: state.result
+      };
+    }
+    applyParsed(parsed, false, { keepBench: true, combo: meta });
+    closeCombo();
+    toast('已生成组合：' + meta.members.length + ' 只，权重 ' + meta.weightText
+      + (meta.note ? '（' + meta.note + '）' : ''));
+  }
+
+  function exitCombo() {
+    var from = state.comboFrom;
+    state.combo = null;
+    state.comboFrom = null;
+
+    // 组合是从空状态直接合成的：没有原文件可回，直接回到上传页
+    if (!from || !from.sheets || !from.sheets.length) {
+      state.result = null;
+      state.fileName = '';
+      state.sheets = [];
+      if ($('previewCard')) $('previewCard').hidden = true;
+      if ($('mappingCard')) $('mappingCard').hidden = false;
+      showView('analyze');
+      toast('已退出组合');
+      return;
+    }
+
+    state.fileName = from.fileName;
+    state.sheets = from.sheets;
+    state.sheetIdx = from.sheetIdx;
+    state.demo = !!from.demo;
+    state.lastArchive = from.lastArchive || null;
+    state.override = from.override || {};
+    state.styleExp = null;
+
+    var r = P.analyze(state.sheets[state.sheetIdx].rows, state.override);
+    if (!r.ok) {
+      toast(r.error || '还原原文件失败，请重新上传');
+      return;
+    }
+    state.result = r;
+    state.productIdx = Math.min(from.productIdx || 0, r.products.length - 1);
+    resetRangeInputs();
+    renderMapping();
+    render(false);
+    toast('已退出组合，回到「' + shortLabel(from.fileName, 16) + '」');
+  }
+
+  function adjustCombo() {
+    openCombo();
+  }
+
+  function doBuildCombo(toCompare) {
+    if (comboUI.sel.length < 2) { toast('至少勾选 2 只产品才能合成'); return; }
+    var sum = comboSum();
+    if (!(sum > 0)) { toast('权重合计需大于 0'); return; }
+    var valid = comboUI.sel.filter(function (m) { return comboWeight(m.key) > 0; });
+    if (valid.length < 2) { toast('至少 2 只产品的权重要大于 0'); return; }
+
+    var pf = CMP.portfolioSeries(comboUI.sel.map(function (m) {
+      return { name: m.name, series: m.series, weight: comboWeight(m.key) };
+    }));
+    if (!pf) { toast('这些成员之间没有共同净值日期'); return; }
+
+    var weightText = comboUI.sel.map(function (m) {
+      return comboPctText(comboWeight(m.key) / sum * 100);
+    }).join('/');
+
+    var meta = {
+      name: comboName(comboUI.sel),
+      members: comboUI.sel.map(function (m) {
+        return {
+          key: m.key, name: m.name, weight: comboWeight(m.key), weightPct: comboWeight(m.key) / sum * 100,
+          scope: m.scope, rec: m.rec, productIdx: m.productIdx, count: m.count,
+          series: m.series
+        };
+      }),
+      weightText: weightText,
+      sum: sum,
+      builtAt: Date.now(),
+      note: ''
+    };
+    if (pf.ts.length < 10) meta.note = '共同区间仅 ' + pf.ts.length + ' 个净值点，仅供参考';
+
+    applyCombo(pf, meta);
+    if (toCompare) comboToCompare();
+  }
+
+  /* 把组合成员放进对比页并生成同权重组合线，保证两处口径一致 */
+  function comboToCompare() {
+    var c = state.combo;
+    if (!c) { toast('先生成组合'); return; }
+    var memKey = 'combo|' + Date.now();
+    var products = c.members.map(function (m) {
+      return { name: shortLabel(m.name, 18), ts: m.series.ts.slice(), nav: m.series.nav.slice(), count: m.series.ts.length };
+    });
+    var rec = {
+      source: 'memory', mem: true, combo: true, memKey: memKey,
+      name: c.name, displayName: c.name, savedAt: Date.now(), size: 0,
+      kind: 'product', hasSnapshot: false
+    };
+    clearMemSource(true);
+    cmp.loaded[memKey] = { ok: true, products: products, fileName: c.name };
+    cmp.mem = [rec];
+    cmp.records = [rec].concat((cmp.records || []).filter(function (r) { return !r.mem; }));
+
+    var room = CMP.MAX_ITEMS - cmp.selected.length;
+    var take = Math.min(products.length, room);
+    if (take < products.length) {
+      toast('对比页最多 ' + CMP.MAX_ITEMS + ' 个对象，只带入前 ' + Math.max(0, take) + ' 只');
+    }
+    var keys = [];
+    for (var i = 0; i < take; i++) {
+      var key = memKey + '#' + i;
+      keys.push(key);
+      cmp.selected.push({ key: key, baseKey: memKey, kind: 'archive', rec: rec, productIdx: i });
+    }
+    if (take >= 2) {
+      cmp.pfWeights = {};
+      cmp.pfTouched = {};
+      keys.forEach(function (k, idx) {
+        cmp.pfWeights[k] = c.members[idx].weight;
+        cmp.pfTouched[k] = true;
+      });
+      cmp.pfOpen = true;
+      cmp.pfItem = null;
+    }
+    openCompare();
+    if (take >= 2) buildPortfolio();
+  }
+
   /* ---------------- 业绩对比 ---------------- */
   var cmp = {
     open: false,
@@ -1950,7 +2425,7 @@
 
     var meta = el('div', 'cmp-item-meta');
     if (rec.mem) {
-      meta.appendChild(el('span', null, '本次文件 · 未存档'));
+      meta.appendChild(el('span', null, rec.combo ? '组合成员 · 未存档' : '本次文件 · 未存档'));
     } else {
       meta.appendChild(el('span', null, AR.fmtTime(rec.savedAt)));
       meta.appendChild(el('span', null, AR.fmtSize(rec.size)));
@@ -2303,34 +2778,23 @@
     }
     var sum = pfSum();
     if (!(sum > 0)) { toast('权重合计需大于 0'); return; }
-
-    var dates = members[0].series.ts.slice();
-    for (var i = 1; i < members.length; i++) {
-      var set = {};
-      for (var j = 0; j < members[i].series.ts.length; j++) set[members[i].series.ts[j]] = 1;
-      dates = dates.filter(function (t) { return set[t] === 1; });
+    if (members.filter(function (m) { return (+cmp.pfWeights[m.key] || 0) > 0; }).length < 2) {
+      toast('至少 2 只产品的权重要大于 0');
+      return;
     }
-    if (dates.length < 2) { toast('这些成员之间没有共同净值日期'); return; }
 
-    var nav = new Array(dates.length);
-    for (var k = 0; k < dates.length; k++) nav[k] = 0;
-    var used = 0;
-    members.forEach(function (m) {
-      var s = { ts: m.series.ts, nav: m.series.nav };
-      var base = valAt(s, dates[0]);
-      var w = (+cmp.pfWeights[m.key] || 0) / sum;
-      if (!(base > 0) || !(w > 0)) return;
-      used++;
-      for (var q = 0; q < dates.length; q++) nav[q] += w * (valAt(s, dates[q]) / base);
-    });
-    if (used < 2) { toast('至少需要 2 个有效权重'); return; }
+    // 与「分析页组合」共用同一段合成逻辑，避免两处口径漂移
+    var pf = CMP.portfolioSeries(members.map(function (m) {
+      return { name: m.name, series: m.series, weight: +cmp.pfWeights[m.key] || 0 };
+    }));
+    if (!pf) { toast('这些成员之间没有共同净值日期'); return; }
 
     cmp.pfItem = {
       key: 'pf',
-      name: '组合（' + used + ' 只）',
+      name: '组合（' + pf.used + ' 只）',
       memberKeys: members.map(function (m) { return m.key; }).join('|'),
       members: members.map(function (m) { return m.name; }),
-      series: { ts: dates, nav: nav, labels: [] }
+      series: { ts: pf.ts, nav: pf.nav, labels: [] }
     };
     cmp.pfDirty = false;
     renderPfCur();
@@ -2726,6 +3190,25 @@
       if (cmp.open) showView('analyze');
       else openCompare();
     });
+
+    // 组合抽屉
+    $('btnCombo').addEventListener('click', openCombo);
+    $('btnCloseCombo').addEventListener('click', closeCombo);
+    $('comboDrawer').addEventListener('click', function (e) {
+      if (e.target === $('comboDrawer')) closeCombo();
+    });
+    $('btnComboRefresh').addEventListener('click', function () {
+      comboUI.expanded = {};
+      renderComboPick();
+      toast('已刷新候选产品');
+    });
+    $('btnComboEven').addEventListener('click', function () {
+      comboUI.sel.forEach(function (m) { delete comboUI.touched[m.key]; });
+      comboEven();
+      renderComboWeights();
+    });
+    $('btnComboBuild').addEventListener('click', function () { doBuildCombo(false); });
+    $('btnComboToCmp').addEventListener('click', function () { doBuildCombo(true); });
     $('cmpSearch').addEventListener('input', function () {
       cmp.filter = this.value;
       renderCmpList();
@@ -2799,6 +3282,7 @@
       if (e.key === 'Escape') {
         $('glossary').hidden = true;
         if ($('archive')) $('archive').hidden = true;
+        if (comboUI.open) closeCombo();
       }
     });
 

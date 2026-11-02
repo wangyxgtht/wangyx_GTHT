@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="assets/style.css?v=20261102v">
+<link rel="stylesheet" href="assets/style.css?v=20261102w">
 </head>
 <body>
 
@@ -37,6 +37,7 @@
     <button class="btn ghost" id="btnArchive" type="button">
       档案<span class="count-badge" id="archCount" hidden>0</span>
     </button>
+    <button class="btn ghost" id="btnCombo" type="button">组合</button>
     <button class="btn ghost" id="btnCompare" type="button">业绩对比</button>
     <button class="btn ghost" id="btnGlossary" type="button">指标口径</button>
     <button class="btn ghost" id="btnExportCsv" type="button" disabled>导出 CSV</button>
@@ -207,7 +208,7 @@
 
       <aside class="side-col">
 
-        <div class="card side-card">
+        <div class="card side-card" id="mappingCard">
           <div class="card-head tight"><h3>数据映射</h3></div>
           <div class="field">
             <label for="selSheet">工作表</label>
@@ -523,18 +524,54 @@
   </div>
 </div>
 
+<!-- 组合抽屉：把多只产品按初始资金比例合成一条净值 -->
+<div class="drawer-mask" id="comboDrawer" hidden>
+  <div class="drawer drawer-wide" role="dialog" aria-modal="true" aria-label="合成组合">
+    <div class="drawer-head">
+      <h3>合成组合 <span class="chip" id="comboModeChip">期初权重 · 不再平衡</span></h3>
+      <button class="icon-btn" id="btnCloseCombo" type="button">关闭</button>
+    </div>
+    <div class="drawer-body">
+      <p class="combo-sub">勾选 2 只以上产品，按<b>初始资金比例</b>合成一条净值；日期取成员共同区间，与业绩对比页的组合口径一致。</p>
+      <div class="arch-tools">
+        <button class="btn ghost sm" id="btnComboRefresh" type="button">刷新档案</button>
+        <span class="arch-count" id="comboPickCount">—</span>
+      </div>
+      <div class="combo-cols">
+        <div class="combo-col">
+          <div class="combo-pick" id="comboPick"></div>
+        </div>
+        <div class="combo-col combo-col-weight">
+          <div class="combo-weight-box">
+            <div class="combo-weight-head">
+              <h4>权重（%）</h4>
+              <button class="btn ghost sm" id="btnComboEven" type="button">等权</button>
+            </div>
+            <div class="combo-weight-list" id="comboWeightList"></div>
+            <p class="combo-sum" id="comboSum">合计 —</p>
+          </div>
+        </div>
+      </div>
+      <div class="combo-foot">
+        <button class="btn ghost" id="btnComboToCmp" type="button">生成并到对比页</button>
+        <button class="btn primary" id="btnComboBuild" type="button">生成并分析</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast" hidden></div>
 
 <script src="lib/xlsx.full.min.js"></script>
 <script src="lib/echarts.min.js"></script>
-<script src="assets/demo-data.js?v=20261102v"></script>
-<script src="assets/parser.js?v=20261102v"></script>
-<script src="assets/metrics.js?v=20261102v"></script>
-<script src="assets/charts.js?v=20261102v"></script>
-<script src="assets/archive.js?v=20261102v"></script>
-<script src="assets/compare.js?v=20261102v"></script>
-<script src="assets/bench.js?v=20261102v"></script>
-<script src="assets/ui.js?v=20261102v"></script>
+<script src="assets/demo-data.js?v=20261102w"></script>
+<script src="assets/parser.js?v=20261102w"></script>
+<script src="assets/metrics.js?v=20261102w"></script>
+<script src="assets/charts.js?v=20261102w"></script>
+<script src="assets/archive.js?v=20261102w"></script>
+<script src="assets/compare.js?v=20261102w"></script>
+<script src="assets/bench.js?v=20261102w"></script>
+<script src="assets/ui.js?v=20261102w"></script>
 <script>
 /* 离线缓存：仅在线（https）形态注册，本机 file:// 与 127.0.0.1 调试时不注册，避免改文件后被缓存挡住 */
 (function () {
