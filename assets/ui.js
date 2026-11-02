@@ -435,6 +435,7 @@
     { value: 'ignore', label: '忽略' }
   ];
   var PV_COLS = 12, PV_ROWS = 20;
+  var previewSig = null;      // 上次渲染时的 {res, sig}，映射没变就不重画
 
   function previewRoles() {
     var res = state.result, roles = {};
@@ -522,6 +523,11 @@
     var cols = res.columns.slice(0, PV_COLS);
     var start = res.headerRow >= 0 ? res.headerRow + 1 : 0;
 
+    // 区间 / 无风险利率变动也会走到这里：映射没变就不重画，避免拖滑块时反复重建表格
+    var sig = state.sheetIdx + '|' + cols.map(function (c) { return c.index + ':' + roles[c.index]; }).join(',');
+    if (table.children.length && previewSig && previewSig.res === res && previewSig.sig === sig) return;
+    previewSig = { res: res, sig: sig };
+
     table.innerHTML = '';
     var thead = document.createElement('thead');
     var trHead = document.createElement('tr');
@@ -546,8 +552,12 @@
         sel.appendChild(op);
       });
       sel.addEventListener('change', function () {
+        var before = roles[c.index];
         roles[c.index] = sel.value;
-        if (!applyRoles(roles)) renderPreview();   // 失败时把下拉还原成实际生效的角色
+        if (!applyRoles(roles)) {      // 校验没过（例如把唯一的日期列设成忽略）
+          roles[c.index] = before;
+          sel.value = before;
+        }
       });
       thRole.appendChild(sel);
       trRole.appendChild(thRole);
