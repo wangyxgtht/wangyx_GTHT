@@ -252,24 +252,42 @@
     };
   }
 
-  /* ---------------- 基准对齐 ---------------- */
-  function alignBenchmark(product, bench) {
-    if (!product || !bench) return null;
-    var bmap = {};
-    for (var i = 0; i < bench.ts.length; i++) bmap[bench.ts[i]] = bench.nav[i];
-    var ts = [], pnav = [], bnav = [];
-    for (var j = 0; j < product.ts.length; j++) {
-      var t = product.ts[j];
-      if (bmap[t] !== undefined && bmap[t] > 0) {
-        ts.push(t); pnav.push(product.nav[j]); bnav.push(bmap[t]);
-      }
+  /* ---------------- 基准对齐 ----------------
+   * 以产品净值日期为主轴，基准取「该日或之前最近一个交易日」的收盘（as-of），
+   * 解决私募月频/月末落在周末、节假日顺延时整点被丢掉的问题。
+   * opts.toleranceDays：最大回溯自然日，默认 10；传 0 等于旧版精确匹配。
+   */
+  var DAY_MS = 86400000;
+
+  function alignBenchmark(product, bench, opts) {
+    if (!product || !bench || !product.ts || !bench.ts) return null;
+    var o = opts || {};
+    var tolDays = (o.toleranceDays === undefined || o.toleranceDays === null) ? 10 : o.toleranceDays;
+    var tol = tolDays * DAY_MS;
+
+    var bts = bench.ts, bnav = bench.nav;
+    var ts = [], pnav = [], bnavOut = [], j = -1, exact = 0, before = 0;
+    for (var i = 0; i < product.ts.length; i++) {
+      var t = product.ts[i];
+      while (j + 1 < bts.length && bts[j + 1] <= t) j++;
+      if (j < 0) { before++; continue; }       // 产品早于基准数据起点
+      if (t - bts[j] > tol) continue;          // 基准停更或长假，超出容忍
+      if (!(bnav[j] > 0)) continue;
+      ts.push(t);
+      pnav.push(product.nav[i]);
+      bnavOut.push(bnav[j]);
+      if (bts[j] === t) exact++;
     }
     if (ts.length < 2) return null;
     return {
       ts: ts,
       product: { ts: ts, nav: pnav },
-      bench: { ts: ts, nav: bnav },
-      points: ts.length
+      bench: { ts: ts, nav: bnavOut },
+      points: ts.length,
+      exact: exact,
+      asOf: ts.length - exact,
+      skippedBefore: before,
+      toleranceDays: tolDays
     };
   }
 

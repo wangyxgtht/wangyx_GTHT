@@ -16,6 +16,8 @@
   var P = NA.parser, M = NA.metrics;
 
   var COLORS = ['#2E6FA7', '#C0392B', '#D89A2A', '#1E7B4F', '#7A6FA8', '#4C8FCB'];
+  /* 指数配色偏灰/青，和产品实线区分 */
+  var INDEX_COLORS = ['#5C6B7A', '#8194A8', '#8B7BB8', '#4F8C7C', '#A08850', '#7D8B6A'];
   var MAX_ITEMS = 6;
   var MIN_COMMON = 30;
 
@@ -44,6 +46,7 @@
   var cache = {};   // key -> {products:[{name,count,ts,nav,labels}], error, fileName, sheets}
 
   function recKey(rec) {
+    if (rec.memKey) return rec.memKey;   // 当前文件的内存数据源，不落盘
     return (rec.source || 'disk') + '|' + (rec.name || '') + '|' + (rec.savedAt || 0);
   }
 
@@ -96,20 +99,6 @@
     return out;
   }
 
-  /* 让每条序列在给定日期集合上归一，返回 [{ts, cum, nav}] */
-  function normalizeOn(items, dates) {
-    return items.map(function (it) {
-      var map = navMap(it.series);
-      var first = map[dates[0]];
-      var cum = new Array(dates.length), nav = new Array(dates.length);
-      for (var i = 0; i < dates.length; i++) {
-        nav[i] = map[dates[i]];
-        cum[i] = first > 0 ? nav[i] / first : null;
-      }
-      return { ts: dates, nav: nav, cum: cum };
-    });
-  }
-
   function normalizeOwn(items) {
     return items.map(function (it) {
       var s = it.series, first = s.nav[0];
@@ -117,6 +106,38 @@
       for (var i = 0; i < s.nav.length; i++) cum[i] = first > 0 ? s.nav[i] / first : null;
       return { ts: s.ts, nav: s.nav, cum: cum };
     });
+  }
+
+  function withCum(ts, nav) {
+    var first = nav[0], cum = new Array(nav.length);
+    for (var i = 0; i < nav.length; i++) cum[i] = first > 0 ? nav[i] / first : null;
+    return { ts: ts, nav: nav, cum: cum };
+  }
+
+  /* 产品：日期都在交集里，直接取值 */
+  function exactOn(dates, series) {
+    var map = navMap(series), ts = [], nav = [];
+    for (var i = 0; i < dates.length; i++) {
+      var v = map[dates[i]];
+      if (v > 0) { ts.push(dates[i]); nav.push(v); }
+    }
+    return withCum(ts, nav);
+  }
+
+  /* 指数：取该日或之前最近一个交易日（与单产品基准同一口径） */
+  function asOfOn(dates, series, toleranceDays) {
+    var tol = (toleranceDays === undefined ? 10 : toleranceDays) * 86400000;
+    var ts = [], nav = [], j = -1;
+    for (var i = 0; i < dates.length; i++) {
+      var t = dates[i];
+      while (j + 1 < series.ts.length && series.ts[j + 1] <= t) j++;
+      if (j < 0) continue;
+      if (t - series.ts[j] > tol) continue;
+      if (!(series.nav[j] > 0)) continue;
+      ts.push(t);
+      nav.push(series.nav[j]);
+    }
+    return ts.length ? withCum(ts, nav) : { ts: [], nav: [], cum: [] };
   }
 
   /* ---------------- 相关性 ---------------- */
@@ -143,10 +164,9 @@
     return cov / Math.sqrt(va * vb);
   }
 
-  function corrMatrix(items, aligned) {
-    var labels = items.map(function (it) { return it.label; });
-    var rets = aligned.map(function (a) { return returnsOn(a.ts, a.nav); });
-    var n = items.length;
+  /* 直接对同一日期集合上的期收益求相关 */
+  function corrFromReturns(labels, rets) {
+    var n = labels.length;
     var matrix = [];
     for (var i = 0; i < n; i++) {
       var row = [];
@@ -195,6 +215,7 @@
     COLS.forEach(function (c) {
       var win = null, winVal = null;
       items.forEach(function (it) {
+        if (it.isIndex) return;              // 最优只在产品之间比
         var v = it.metrics ? it.metrics[c.key] : null;
         if (v === null || v === undefined || !isFinite(v)) return;
         if (winVal === null || (c.dir > 0 ? v > winVal : v < winVal)) { winVal = v; win = it.key; }
@@ -213,7 +234,7 @@
     var o = opts || {};
     items = (items || []).slice(0, MAX_ITEMS);
     if (items.length < 2) {
-      return { ok: false, reason: 'need-more', message: '至少勾选 2 只产品才能对比' };
+      return { ok: false, reason: 'need-more', message: '至少勾选 2 个对象才能对比' };
     }
 
     var warnings = [];
@@ -223,7 +244,9 @@
         warnings.push(it.label + '：' + (m.error || '无法计算指标'));
       }
       return {
-        key: it.key, label: it.label, name: it.name, color: it.color || COLORS[idx % COLORS.length],
+        key: it.key, label: it.label, name: it.name,
+        color: it.color || (it.isIndex ? INDEX_COLORS[idx % INDEX_COLORS.length] : COLORS[idx % COLORS.length]),
+        isIndex: !!it.isIndex,
         rec: it.rec, productIdx: it.productIdx, series: it.series, metrics: m.ok ? m : null
       };
     }).filter(function (it) {
@@ -232,10 +255,10 @@
     });
 
     if (withMetrics.length < 2) {
-      return { ok: false, reason: 'need-more', message: '可用的产品不足 2 只（有的档案解析失败）', warnings: warnings };
+      return { ok: false, reason: 'need-more', message: '可用的对象不足 2 个（有的档案解析失败）', warnings: warnings };
     }
 
-    // 对齐
+    // 对齐：以产品共同日期为轴，指数按最近交易日取值（月频/月末非交易日也能对上）
     var align = (o.align === 'own') ? 'own' : 'common';
     var dates, aligned;
     if (align === 'own') {
@@ -244,14 +267,18 @@
       aligned.forEach(function (a) { a.ts.forEach(function (t) { allTs[t] = 1; }); });
       dates = Object.keys(allTs).map(Number).sort(function (a, b) { return a - b; });
     } else {
-      dates = intersect(withMetrics);
+      var baseItems = withMetrics.filter(function (it) { return !it.isIndex; });
+      if (!baseItems.length) baseItems = withMetrics;
+      dates = intersect(baseItems);
       if (dates.length < 2) {
         return {
           ok: false, reason: 'no-overlap', message: '所选产品没有共同的净值日期，无法对比（可切换为「各自起点」看走势）',
           warnings: warnings
         };
       }
-      aligned = normalizeOn(withMetrics, dates);
+      aligned = withMetrics.map(function (it) {
+        return it.isIndex ? asOfOn(dates, it.series, 10) : exactOn(dates, it.series);
+      });
       if (dates.length < MIN_COMMON) {
         warnings.push('共同区间只有 ' + dates.length + ' 个净值点，走势对比仅供参考');
       }
@@ -259,34 +286,57 @@
 
     withMetrics.forEach(function (it, i) { it.aligned = aligned[i]; });
 
-    // 排序：年化收益降序（指标缺失置底）
-    withMetrics.sort(function (a, b) {
-      var va = a.metrics ? a.metrics.annualized : -Infinity;
-      var vb = b.metrics ? b.metrics.annualized : -Infinity;
+    // 指数改用「共同区间」重算指标：10 年指数年化 vs 3 年产品年化不可比
+    if (align === 'common') {
+      withMetrics.forEach(function (it) {
+        if (!it.isIndex) return;
+        var a = it.aligned;
+        if (!a.ts.length) return;
+        if (a.ts.length < dates.length) {
+          warnings.push(it.label + ' 的数据起点晚于产品，该指数的指标只覆盖 ' + a.ts.length + ' 个共同点');
+        }
+        var mm = M.compute({ ts: a.ts, nav: a.nav }, { rf: o.rf });
+        if (mm.ok) it.metrics = mm;
+      });
+    } else {
+      var hasIndexOwn = false;
+      withMetrics.forEach(function (it) { if (it.isIndex) hasIndexOwn = true; });
+      if (hasIndexOwn) warnings.push('「各自起点」模式下指数指标按自身完整历史计算，跨期对比请改用「共同区间」');
+    }
+
+    // 排序：产品按年化收益降序在前，指数保持勾选顺序排在后面
+    var productItems = [], indexItems = [], sorted = [];
+    withMetrics.forEach(function (it) { (it.isIndex ? indexItems : productItems).push(it); });
+    productItems.sort(function (a, b) {
+      var va = a.metrics ? a.metrics.annualized : null;
+      var vb = b.metrics ? b.metrics.annualized : null;
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
       return vb - va;
     });
+    sorted = productItems.concat(indexItems);
+    withMetrics = sorted;
 
-    // 叠加图序列（time 轴）
+    // 叠加图序列（time 轴）；指数用虚线＋专属配色
     var overlay = {
       names: withMetrics.map(function (it) { return it.label; }),
       colors: withMetrics.map(function (it) { return it.color; }),
       series: withMetrics.map(function (it) {
         var pts = [];
         for (var i = 0; i < it.aligned.ts.length; i++) pts.push([it.aligned.ts[i], it.aligned.cum[i]]);
-        return { name: it.label, color: it.color, data: pts };
+        return { name: it.label, color: it.color, data: pts, dash: it.isIndex };
       })
     };
 
     // 超额：基线
     var baseName = '', baseCum = null;
     if (o.baseline === 'bench' && o.bench && o.bench.ts && o.bench.ts.length) {
-      var bmap = navMap(o.bench);
-      var bdates = align === 'own' ? o.bench.ts.slice() : dates.slice();
-      // 只在产品交集日期上取基准
-      var usable = bdates.filter(function (t) { return bmap[t] !== undefined; });
-      if (usable.length >= 5) {
-        var first = bmap[usable[0]];
-        baseCum = { ts: usable, cum: usable.map(function (t) { return first > 0 ? bmap[t] / first : null; }) };
+      var bser = align === 'own'
+        ? withCum(o.bench.ts.slice(), o.bench.nav.slice())
+        : asOfOn(dates, o.bench, 10);
+      if (bser.ts.length >= 5) {
+        baseCum = { ts: bser.ts, cum: bser.cum };
         baseName = o.bench.name || '基准';
       } else {
         warnings.push('基准与产品的共同日期不足，已退回「相对第一只产品」');
@@ -325,7 +375,28 @@
     };
 
     var best = bestOf(withMetrics);
-    var corr = align === 'own' ? null : corrMatrix(withMetrics, aligned);
+
+    // 相关性：只在所有对象都有净值的日期上算（指数起始晚时不至于错位）
+    var corr = null;
+    if (align === 'common') {
+      var common = withMetrics[0].aligned.ts.slice();
+      for (var ci = 1; ci < withMetrics.length; ci++) {
+        var set = {};
+        for (var si = 0; si < withMetrics[ci].aligned.ts.length; si++) set[withMetrics[ci].aligned.ts[si]] = 1;
+        var keep = [];
+        for (var ki = 0; ki < common.length; ki++) if (set[common[ki]]) keep.push(common[ki]);
+        common = keep;
+      }
+      if (common.length >= 4) {
+        var rets = withMetrics.map(function (it) {
+          var map = navMap({ ts: it.aligned.ts, nav: it.aligned.nav });
+          var arr = [];
+          for (var i = 0; i < common.length; i++) arr.push(map[common[i]]);
+          return returnsOn(common, arr);
+        });
+        corr = corrFromReturns(withMetrics.map(function (it) { return it.label; }), rets);
+      }
+    }
     var heat = heatMatrix(withMetrics, 18);
 
     return {
@@ -340,6 +411,8 @@
       period: period,
       corr: corr,
       heat: heat,
+      hasIndex: indexItems.length > 0,
+      indexCount: indexItems.length,
       start: M.dstr(dates[0]),
       end: M.dstr(dates[dates.length - 1]),
       startTs: dates[0],

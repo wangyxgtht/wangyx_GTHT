@@ -409,9 +409,10 @@
         symbol: 'circle',
         symbolSize: 5,
         sampling: 'lttb',
-        lineStyle: { width: 1.9, color: s.color },
+        lineStyle: { width: s.dash ? 1.4 : 1.9, color: s.color, type: s.dash ? 'dashed' : 'solid' },
         itemStyle: { color: s.color },
-        emphasis: { focus: 'series' }
+        emphasis: { focus: 'series' },
+        z: s.dash ? 2 : 3
       };
     });
     ch.setOption({

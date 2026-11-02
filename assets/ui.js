@@ -5,7 +5,7 @@
   'use strict';
 
   var NA = global.NAVApp = global.NAVApp || {};
-  var P = NA.parser, M = NA.metrics, CH = NA.charts, AR = NA.archive, CMP = NA.compare;
+  var P = NA.parser, M = NA.metrics, CH = NA.charts, AR = NA.archive, CMP = NA.compare, IL = NA.indexLib;
   var DAY = 86400000;
 
   var state = {
@@ -20,11 +20,22 @@
     to: null,
     benchmark: null,
     benchName: '',
+    benchCode: '',
+    benchTr: false,
+    benchSource: 'none',   // none | index | upload | demo
     metrics: null,
     benchM: null,
     prodAlignM: null,
+    alignPoints: 0,
+    alignExact: 0,
+    alignAsOf: 0,
+    alignSkipped: 0,
+    alignStart: null,
+    alignEnd: null,
     demo: false,
     archiveMode: 'none',
+    recentCount: 0,
+    recentRows: [],
     lastArchive: null
   };
 
@@ -122,6 +133,7 @@
   }
 
   function applyParsed(parsed, isDemo) {
+    clearMemSource(true);   // 换文件后旧的「本次文件」数据源作废
     state.fileName = parsed.fileName || '未命名文件';
     state.sheets = parsed.sheets || [];
     state.demo = !!isDemo;
@@ -131,8 +143,17 @@
     state.to = null;
     state.benchmark = null;
     state.benchName = '';
+    state.benchCode = '';
+    state.benchTr = false;
+    state.benchSource = 'none';
     state.benchM = null;
     state.prodAlignM = null;
+    state.alignPoints = 0;
+    state.alignExact = 0;
+    state.alignAsOf = 0;
+    state.alignSkipped = 0;
+    state.alignStart = null;
+    state.alignEnd = null;
 
     var picked = -1, firstRes = null;
     for (var i = 0; i < state.sheets.length; i++) {
@@ -158,6 +179,7 @@
     if (isDemo) {
       state.benchmark = NA.demo.benchmark();
       state.benchName = state.benchmark.name;
+      state.benchSource = 'demo';
     }
 
     busy(false);
@@ -262,6 +284,15 @@
     if (state.lastArchive && state.lastArchive.fileName === state.fileName) {
       tags.appendChild(el('span', 'tag ok', '已存档 ' + AR.fmtTime(state.lastArchive.at)));
     }
+    if (res.products.length > 1) {
+      var cbtn = document.createElement('button');
+      cbtn.type = 'button';
+      cbtn.className = 'btn ghost sm fb-cmp-btn';
+      cbtn.textContent = '本文件 ' + res.products.length + ' 只产品对比';
+      cbtn.title = '不存档，直接把当前文件里的全部产品放进对比页';
+      cbtn.addEventListener('click', compareCurrentFile);
+      tags.appendChild(cbtn);
+    }
   }
 
   /* ---------------- 主渲染 ---------------- */
@@ -277,15 +308,24 @@
     state.benchM = null;
     state.prodAlignM = null;
     if (state.benchmark) {
-      var al = M.alignBenchmark(series, state.benchmark);
+      var al = M.alignBenchmark(series, state.benchmark, { toleranceDays: 10 });
       if (al) {
-        state.prodAlignM = M.compute({ ts: al.product.ts, nav: al.product.nav }, { rf: state.rf, from: state.from, to: state.to });
-        state.benchM = M.compute({ ts: al.bench.ts, nav: al.bench.nav }, { rf: state.rf, from: state.from, to: state.to });
-        state.alignPoints = al.points;
-        state.alignStart = al.ts[0];
-        state.alignEnd = al.ts[al.ts.length - 1];
+        var pmAl = M.compute({ ts: al.product.ts, nav: al.product.nav }, { rf: state.rf, from: state.from, to: state.to });
+        var bmAl = M.compute({ ts: al.bench.ts, nav: al.bench.nav }, { rf: state.rf, from: state.from, to: state.to });
+        if (pmAl.ok && bmAl.ok) {
+          state.prodAlignM = pmAl;
+          state.benchM = bmAl;
+          state.alignPoints = al.points;
+          state.alignExact = al.exact || 0;
+          state.alignAsOf = al.asOf || 0;
+          state.alignSkipped = al.skippedBefore || 0;
+          state.alignStart = al.ts[0];
+          state.alignEnd = al.ts[al.ts.length - 1];
+        } else {
+          toast('所选区间内与基准的重叠点不足 2 个');
+        }
       } else {
-        toast('基准与产品没有共同日期，无法对齐');
+        toast('基准与产品没有可对齐的日期（可把区间往后调，指数数据自 2015 年起）');
       }
     }
 
@@ -530,7 +570,8 @@
 
       section('基准对比（' + (state.benchName || '基准') + '）');
       row('对齐区间', dstr(state.alignStart) + ' 至 ' + dstr(state.alignEnd),
-        '对齐点数', String(state.alignPoints));
+        '对齐点数', String(state.alignPoints)
+        + (state.alignAsOf ? '（' + state.alignAsOf + ' 点取前值）' : ''));
       row('产品累计', V(pct(pm.totalReturn), signedCls(pm.totalReturn)),
         '基准累计', V(pct(bm.totalReturn), signedCls(bm.totalReturn)));
       row('产品年化', V(pct(pm.annualized), signedCls(pm.annualized)),
@@ -579,22 +620,93 @@
   }
 
   /* ---------------- 基准面板 ---------------- */
+  function benchPair() {
+    if (!IL || state.benchSource !== 'index' || !state.benchCode) return null;
+    return IL.pair(state.benchCode);
+  }
+
+  function fillBenchSelect() {
+    var sel = $('benchIndex');
+    if (!sel || sel.getAttribute('data-filled') === '1') return;
+    if (!IL || !IL.ready()) return;
+    var groups = IL.groups();
+    if (!groups.length) return;
+    sel.innerHTML = '<option value="">选择内置指数…</option>';
+    groups.forEach(function (g) {
+      var og = document.createElement('optgroup');
+      og.label = g.group;
+      g.items.forEach(function (it) {
+        var o = document.createElement('option');
+        o.value = it.code;
+        o.textContent = it.name;
+        og.appendChild(o);
+      });
+      sel.appendChild(og);
+    });
+    sel.setAttribute('data-filled', '1');
+  }
+
+  function indexCount() {
+    if (!IL || !IL.ready()) return 0;
+    var n = 0;
+    IL.groups().forEach(function (g) { n += g.items.length; });
+    return n;
+  }
+
+  function renderBenchMeta() {
+    var meta = $('benchMeta');
+    if (!meta) return;
+    if (!IL) { meta.textContent = ''; return; }
+    if (!IL.ready()) {
+      meta.textContent = '内置指数首次使用需载入数据（约 0.7 MB，之后走缓存）';
+      return;
+    }
+    var txt = indexCount() + ' 条指数 · 数据截至 ' + (IL.updated() || '—');
+    if (state.benchSource === 'index' && state.benchmark) {
+      txt += ' · 已对齐 ' + (state.alignPoints || 0) + ' 点';
+    }
+    meta.textContent = txt;
+  }
+
   function renderBenchPanel() {
     var box = $('benchResult');
     var clearBtn = $('btnClearBench');
     var dropText = $('benchText');
+    var sel = $('benchIndex');
+    var mode = $('benchMode');
+    var pair = benchPair();
+    if (IL && IL.ready()) fillBenchSelect();
 
     if (!state.benchmark) {
       box.hidden = true;
       clearBtn.hidden = true;
-      dropText.textContent = '上传基准序列（Excel / CSV）';
+      if (sel) sel.value = '';
+      if (mode) mode.hidden = true;
+      dropText.textContent = '上传自有基准（Excel / CSV）';
+      renderBenchMeta();
       return;
     }
-    dropText.textContent = (state.benchName || '基准') + ' · ' + (state.benchmark.count || state.benchmark.nav.length) + ' 点';
+
+    if (sel) sel.value = (state.benchSource === 'index') ? state.benchCode : '';
+    if (mode) {
+      mode.hidden = state.benchSource !== 'index';
+      var prBtn = mode.querySelector('[data-tr="0"]');
+      var trBtn = mode.querySelector('[data-tr="1"]');
+      var hasTr = !!(pair && pair.tr);
+      if (trBtn) {
+        trBtn.disabled = !hasTr;
+        trBtn.title = hasTr ? '' : '这条指数暂无全收益数据';
+        trBtn.classList.toggle('is-on', !!state.benchTr && hasTr);
+      }
+      if (prBtn) prBtn.classList.toggle('is-on', !state.benchTr || !hasTr);
+    }
+    dropText.textContent = (state.benchName || '基准') + ' · '
+      + (state.benchmark.count || state.benchmark.nav.length) + ' 点';
 
     if (!state.benchM || !state.prodAlignM) {
       box.hidden = true;
       clearBtn.hidden = false;
+      renderBenchMeta();
       return;
     }
 
@@ -602,14 +714,65 @@
     var excessCum = (1 + pm.totalReturn) / (1 + bm.totalReturn) - 1;
     var excessAnn = (1 + pm.annualized) / (1 + bm.annualized) - 1;
     var rdd = relativeDD(state.prodAlignM.nav, state.benchM.nav);
+    var pts = String(state.alignPoints || 0)
+      + (state.alignAsOf ? '（' + state.alignAsOf + ' 点取前值）' : '');
 
     box.hidden = false;
     clearBtn.hidden = false;
     box.innerHTML = ''
+      + benchRow('对齐点数', pts, '')
+      + (state.alignSkipped
+        ? benchRow('区间裁剪', '前 ' + state.alignSkipped + ' 点早于基准数据', '')
+        : '')
       + benchRow('超额累计', pct(excessCum), signedCls(excessCum))
       + benchRow('超额年化', pct(excessAnn), signedCls(excessAnn))
       + benchRow('基准年化', pct(bm.annualized), signedCls(bm.annualized))
       + benchRow('相对最大回撤', pct(rdd), 'neg');
+    renderBenchMeta();
+  }
+
+  /* 选中内置指数：直接复用 state.benchmark，后续计算/图表/导出全部沿用原链路 */
+  function useBuiltinIndex(code, wantTr) {
+    if (!IL) { toast('指数模块未加载'); return; }
+    var s = IL.series(code, wantTr);
+    if (!s) { toast('这条指数没有对应口径的数据'); return; }
+    state.benchmark = { name: s.name, ts: s.ts, nav: s.nav, labels: [], count: s.count };
+    state.benchName = s.name;
+    state.benchCode = code;
+    state.benchTr = !!s.tr;
+    state.benchSource = 'index';
+    renderBenchPanel();
+    if (state.metrics) render(false);
+  }
+
+  function clearBenchmark(silent) {
+    state.benchmark = null;
+    state.benchName = '';
+    state.benchCode = '';
+    state.benchTr = false;
+    state.benchSource = 'none';
+    state.benchM = null;
+    state.prodAlignM = null;
+    state.alignPoints = 0;
+    state.alignExact = 0;
+    state.alignAsOf = 0;
+    state.alignSkipped = 0;
+    renderBenchPanel();
+    if (state.metrics) render(false);
+    if (!silent) toast('已移除基准');
+  }
+
+  /* 懒加载指数数据包，第一次点开下拉时才注入脚本 */
+  function ensureBenchLib() {
+    if (!IL || IL.ready()) { fillBenchSelect(); renderBenchMeta(); return; }
+    renderBenchMeta();
+    IL.ensure().then(function () {
+      fillBenchSelect();
+      renderBenchMeta();
+    }).catch(function (e) {
+      toast(e && e.message ? e.message : '指数数据加载失败');
+      renderBenchMeta();
+    });
   }
 
   function benchRow(k, v, cls) {
@@ -654,7 +817,7 @@
     CH.renderAnnual('chartAnnual', m.annual);
     CH.renderHeat('chartHeat', m.monthly);
 
-    $('navNote').textContent = useBench ? '已按共同日期对齐，起点归一为 1' : '起点归一为 1';
+    $('navNote').textContent = useBench ? '已按最近交易日对齐，起点归一为 1' : '起点归一为 1';
     $('ddNote').textContent = relDD ? '产品回撤 + 相对基准回撤（虚线）' : '相对历史最高净值的跌幅';
     $('rfEcho').textContent = pct(state.rf);
   }
@@ -723,6 +886,8 @@
       rows.push(['', '']);
       rows.push(['基准', state.benchName || '']);
       rows.push(['对齐区间', dstr(state.alignStart) + ' 至 ' + dstr(state.alignEnd)]);
+      rows.push(['对齐点数', String(state.alignPoints)
+        + (state.alignAsOf ? '（其中 ' + state.alignAsOf + ' 点按最近交易日取前值）' : '')]);
       rows.push(['基准累计收益', pct(bm.totalReturn)]);
       rows.push(['基准年化', pct(bm.annualized)]);
       rows.push(['超额累计', pct((1 + pm2.totalReturn) / (1 + bm.totalReturn) - 1)]);
@@ -876,7 +1041,7 @@
       state.lastArchive = { at: Date.now(), mode: r.mode, fileName: file.name, saved: r.saved || [] };
       refreshArchiveStatus();
       if (state.fileName === file.name && state.result) renderFilebar();
-      if (cmp.open) { cmp.records = []; loadCompareRecords(); }
+      if (cmp.open) loadCompareRecords();
       toast(r.mode === 'server'
         ? '已存档：' + ((r.saved && r.saved[0]) || file.name)
         : '已暂存到浏览器档案，可随时打包导出');
@@ -942,7 +1107,66 @@
       badge.textContent = rows.length;
       badge.hidden = !rows.length;
       $('archListCount').textContent = rows.length ? rows.length + ' 条档案' : '';
+      renderRecent(rows);
     }).catch(function () { /* 静默 */ });
+  }
+
+  /* ---------------- 主页「最近上传」 ---------------- */
+  function shortArchiveName(rec) {
+    var t = String(rec.displayName || rec.name || '');
+    t = t.replace(/^\d{8}-\d{6}[ _]?/, '').replace(/^基准_/, '');
+    return t;
+  }
+
+  /* 当前正在看的这份：上传时记的是原文件名，档案名带了时间戳前缀 */
+  function isCurrentArchive(rec) {
+    var n = String(rec.name || '');
+    if (!state.fileName || !n) return false;
+    return n === state.fileName || n.replace(/^\d{8}-\d{6}_/, '') === state.fileName;
+  }
+
+  function renderRecent(rows) {
+    var wrap = $('recentState');
+    var box = $('recentList');
+    if (!wrap || !box) return;
+
+    var list = (rows || []).filter(function (r) { return r.kind !== 'snapshot'; });
+    var total = list.length;
+    state.recentCount = total;
+    state.recentRows = list;
+    if (!total) {
+      wrap.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+
+    box.innerHTML = '';
+    list.slice(0, 8).forEach(function (rec) {
+      var row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'recent-item';
+      row.title = '载入分析：' + (rec.displayName || rec.name);
+      row.appendChild(el('span', 'recent-ico', rec.kind === 'bench' ? '基' : 'X'));
+
+      var main = el('span', 'recent-main');
+      main.appendChild(el('span', 'recent-name', shortArchiveName(rec)));
+      main.appendChild(el('span', 'recent-meta',
+        AR.fmtTime(rec.savedAt) + ' · ' + AR.fmtSize(rec.size)
+        + ' · ' + (rec.source === 'disk' ? '本机' : '浏览器')
+        + (rec.kind === 'bench' ? ' · 基准' : '')));
+      row.appendChild(main);
+      if (isCurrentArchive(rec)) {
+        row.className += ' is-current';
+        row.appendChild(el('span', 'recent-cur', '当前'));
+      }
+      row.appendChild(el('span', 'recent-go', '载入 →'));
+
+      row.addEventListener('click', function () { loadArchiveRecord(rec); });
+      box.appendChild(row);
+    });
+
+    $('recentHint').textContent = '共 ' + total + ' 条 · 点一行直接载入分析';
+    wrap.hidden = !!cmp.open;
   }
 
   function btn(label, cls, onClick) {
@@ -1053,6 +1277,8 @@
       busy(false);
       applyParsed(parsed, false);
       $('archive').hidden = true;
+      renderRecent(state.recentRows || []);   // 重画一次，标出「当前」
+      if (global.scrollTo) global.scrollTo({ top: 0, behavior: 'smooth' });
       toast('已载入档案：' + rec.name);
     }).catch(function (e) {
       busy(false);
@@ -1091,9 +1317,11 @@
     loaded: {},       // recKey -> {ok, products, error, ...}
     selected: [],     // [{key, rec, productIdx}]
     align: 'common',
-    baseline: 'first',
+    baseline: 'first',      // first | bench | idx:CODE
+    indexOpen: false,
     filter: '',
     rfDirty: false,   // 对比视图改过无风险利率，回到单产品视图时要重算
+    mem: [],          // 当前文件的内存数据源（不落盘）
     result: null
   };
 
@@ -1116,6 +1344,7 @@
       $('btnExportCsv').hidden = false;
     }
     $('btnCompare').classList.toggle('on', isCmp);
+    if ($('recentState')) $('recentState').hidden = isCmp || !state.recentCount;
     // 回到单产品视图时补算一次：对比视图里可能改过无风险利率
     if (!isCmp && cmp.rfDirty) {
       cmp.rfDirty = false;
@@ -1137,6 +1366,17 @@
     showView('compare');
     if (!AR) { toast('档案模块未加载，无法对比'); return; }
     syncRfInputs();
+    fillCmpBase();
+    if (cmp.indexOpen) renderCmpIndexList();
+    // 对比页是明确的「要比一比」动作，这里后台补一次指数数据，让超额基线下拉完整
+    if (IL && !IL.ready()) {
+      IL.ensure().then(function () {
+        fillBenchSelect();
+        renderBenchMeta();
+        fillCmpBase();
+        if (cmp.indexOpen) renderCmpIndexList();
+      }).catch(function () { /* 失败时保持只有第一只产品可选 */ });
+    }
     if (!cmp.records.length) loadCompareRecords();
     else renderCmpList();
     rebuildCompare();
@@ -1148,7 +1388,8 @@
     box.innerHTML = '';
     box.appendChild(el('p', 'arch-empty', '正在读取档案…'));
     AR.list().then(function (rows) {
-      cmp.records = rows.filter(function (r) { return r.kind !== 'snapshot'; });
+      var mem = cmp.mem || [];
+      cmp.records = mem.concat(rows.filter(function (r) { return r.kind !== 'snapshot'; }));
       renderCmpList();
       rebuildCompare();
     }).catch(function (e) {
@@ -1196,10 +1437,14 @@
     return null;
   }
 
+  function selectedList(baseKey) {
+    return cmp.selected.filter(function (s) { return s.baseKey === baseKey; });
+  }
+
   function cmpItem(rec) {
-    var key = cmpKey(rec);
-    var sel = selectedOf(key);
-    var on = !!sel;
+    var base = cmpKey(rec);
+    var mine = selectedList(base);
+    var on = mine.length > 0;
     var it = el('div', 'cmp-item' + (on ? ' on' : ''));
     var top = el('div', 'cmp-item-top');
 
@@ -1217,39 +1462,44 @@
 
     it.addEventListener('click', function (e) {
       if (e.target === cb) return;
-      if (e.target.tagName === 'SELECT' || e.target.tagName === 'OPTION') return;
+      if (e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT' || e.target.tagName === 'OPTION') return;
       cb.checked = !cb.checked;
       toggleCmpItem(rec, cb.checked);
     });
 
     var meta = el('div', 'cmp-item-meta');
-    meta.appendChild(el('span', null, AR.fmtTime(rec.savedAt)));
-    meta.appendChild(el('span', null, AR.fmtSize(rec.size)));
-    meta.appendChild(el('span', null, rec.source === 'disk' ? '本机' : '浏览器'));
+    if (rec.mem) {
+      meta.appendChild(el('span', null, '本次文件 · 未存档'));
+    } else {
+      meta.appendChild(el('span', null, AR.fmtTime(rec.savedAt)));
+      meta.appendChild(el('span', null, AR.fmtSize(rec.size)));
+      meta.appendChild(el('span', null, rec.source === 'disk' ? '本机' : '浏览器'));
+    }
     it.appendChild(meta);
 
-    var L = cmp.loaded[key];
+    var L = cmp.loaded[base];
     if (!L) {
       it.appendChild(el('div', 'cmp-item-meta', '正在识别产品…'));
       ensureCmpLoaded(rec).then(function () { if (cmp.open) renderCmpList(); });
     } else if (!L.ok) {
       it.appendChild(el('div', 'cmp-item-err', '解析失败：' + (L.error || '未知原因')));
     } else if (L.products.length > 1) {
-      var s = document.createElement('select');
-      s.className = 'cmp-item-sel';
+      cb.indeterminate = on && mine.length < L.products.length;
+      var chips = el('div', 'cmp-prods');
       L.products.forEach(function (p, idx) {
-        var o = document.createElement('option');
-        o.value = String(idx);
-        o.textContent = p.name + '（' + p.count + ' 点）';
-        s.appendChild(o);
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'cmp-prod' + (selectedOf(base + '#' + idx) ? ' on' : '');
+        chip.textContent = p.name;
+        chip.title = p.name + ' · ' + p.count + ' 点（点击加入/移出对比）';
+        chip.addEventListener('click', function (e) {
+          e.stopPropagation();
+          toggleCmpProduct(rec, idx);
+        });
+        chips.appendChild(chip);
       });
-      s.value = String(sel ? Math.min(sel.productIdx, L.products.length - 1) : 0);
-      s.addEventListener('change', function () {
-        if (!sel) return;
-        sel.productIdx = +s.value;
-        rebuildCompare();
-      });
-      it.appendChild(s);
+      it.appendChild(el('div', 'cmp-item-meta', '点产品名加入对比，可多选'));
+      it.appendChild(chips);
     } else if (L.products.length === 1) {
       it.appendChild(el('div', 'cmp-item-meta', L.products[0].name + ' · ' + L.products[0].count + ' 点'));
     }
@@ -1265,27 +1515,220 @@
     });
   }
 
+  /* 勾选整份档案：加入它的全部产品（受限 6 个上限）；取消则全部移出 */
   function toggleCmpItem(rec, on) {
-    var key = cmpKey(rec);
+    var base = cmpKey(rec);
+    var mine = selectedList(base);
+    var L = cmp.loaded[base];
+    var total = (L && L.ok && L.products.length) ? L.products.length : 1;
+
+    if (!on) {
+      mine.forEach(function (s) { cmp.selected.splice(cmp.selected.indexOf(s), 1); });
+      renderCmpList();
+      updateCmpCount();
+      rebuildCompare();
+      return;
+    }
+
+    if (mine.length >= total) return;
+    var room = CMP.MAX_ITEMS - cmp.selected.length;
+    if (room <= 0) {
+      toast('最多同时对比 ' + CMP.MAX_ITEMS + ' 个对象，先取消一个再选');
+      renderCmpList();
+      return;
+    }
+    var add = [];
+    for (var i = 0; i < total; i++) {
+      if (!selectedOf(base + '#' + i)) add.push(i);
+    }
+    var wanted = add.length;
+    add = add.slice(0, room);
+    add.forEach(function (idx) {
+      cmp.selected.push({
+        key: base + '#' + idx, baseKey: base, kind: 'archive', rec: rec, productIdx: idx
+      });
+    });
+    if (add.length < wanted) {
+      toast('最多同时对比 ' + CMP.MAX_ITEMS + ' 个，已加入前 ' + add.length + ' 只');
+    }
+    ensureCmpLoaded(rec).then(function () {
+      if (!cmp.open) return;
+      renderCmpList();
+      rebuildCompare();
+    });
+    renderCmpList();
+    updateCmpCount();
+    rebuildCompare();
+  }
+
+  /* 单只产品：点产品名加入/移出，同一档案可同时选多只 */
+  function toggleCmpProduct(rec, idx) {
+    var base = cmpKey(rec);
+    var key = base + '#' + idx;
     var sel = selectedOf(key);
-    if (on) {
-      if (sel) return;
+    if (sel) {
+      cmp.selected.splice(cmp.selected.indexOf(sel), 1);
+    } else {
       if (cmp.selected.length >= CMP.MAX_ITEMS) {
-        toast('最多同时对比 ' + CMP.MAX_ITEMS + ' 只，先取消一只再选');
+        toast('最多同时对比 ' + CMP.MAX_ITEMS + ' 个对象，先取消一个再选');
         renderCmpList();
         return;
       }
-      cmp.selected.push({ key: key, rec: rec, productIdx: 0 });
+      cmp.selected.push({ key: key, baseKey: base, kind: 'archive', rec: rec, productIdx: idx });
       ensureCmpLoaded(rec).then(function () {
         if (!cmp.open) return;
         renderCmpList();
         rebuildCompare();
       });
+    }
+    renderCmpList();
+    updateCmpCount();
+    rebuildCompare();
+  }
+
+  /* ---------------- 当前文件（内存数据源） ---------------- */
+  function clearMemSource(silent) {
+    if (!cmp || !cmp.mem || !cmp.mem.length) return;
+    var keys = {};
+    cmp.mem.forEach(function (r) { keys[r.memKey] = 1; delete cmp.loaded[r.memKey]; });
+    cmp.selected = cmp.selected.filter(function (s) {
+      return !(s.baseKey && keys[s.baseKey]);
+    });
+    cmp.mem = [];
+    cmp.records = (cmp.records || []).filter(function (r) { return !r.mem; });
+    if (!silent && cmp.open) {
+      renderCmpList();
+      updateCmpCount();
+      rebuildCompare();
+    }
+  }
+
+  function compareCurrentFile() {
+    var res = state.result;
+    if (!res || !res.products || res.products.length < 2) {
+      toast('这个文件里只识别到 1 只产品，用档案勾选即可');
+      return;
+    }
+    clearMemSource(true);
+
+    var memKey = 'mem|' + state.fileName;
+    var rec = {
+      source: 'memory', mem: true, memKey: memKey,
+      name: state.fileName, displayName: state.fileName,
+      savedAt: Date.now(), size: 0, kind: 'product', hasSnapshot: false
+    };
+    cmp.loaded[memKey] = { ok: true, products: res.products, fileName: state.fileName };
+    cmp.mem = [rec];
+    cmp.records = [rec].concat((cmp.records || []).filter(function (r) { return !r.mem; }));
+
+    var room = CMP.MAX_ITEMS - cmp.selected.length;
+    var take = Math.min(res.products.length, room);
+    if (take <= 0) {
+      toast('已选满 ' + CMP.MAX_ITEMS + ' 个，先取消一些再加入本文件产品');
+    } else {
+      for (var i = 0; i < take; i++) {
+        cmp.selected.push({
+          key: memKey + '#' + i, baseKey: memKey, kind: 'archive', rec: rec, productIdx: i
+        });
+      }
+      if (res.products.length > take) {
+        toast('共 ' + res.products.length + ' 只，已先加入前 ' + take + ' 只');
+      }
+    }
+    openCompare();
+  }
+
+  /* ---------------- 对比页：内置指数区 ---------------- */
+  function toggleCmpIndex(code, on) {
+    var key = 'idx:' + code;
+    var sel = selectedOf(key);
+    if (on) {
+      if (sel) return;
+      if (cmp.selected.length >= CMP.MAX_ITEMS) {
+        toast('最多同时对比 ' + CMP.MAX_ITEMS + ' 个对象，先取消一个再选');
+        renderCmpIndexList();
+        return;
+      }
+      cmp.selected.push({ key: key, kind: 'index', code: code });
     } else if (sel) {
       cmp.selected.splice(cmp.selected.indexOf(sel), 1);
     }
-    renderCmpList();
+    renderCmpIndexList();
+    updateCmpCount();
     rebuildCompare();
+  }
+
+  function renderCmpIndexList() {
+    var box = $('cmpIndexList');
+    if (!box || box.hidden) return;
+    if (!IL) { box.innerHTML = '<p class="arch-empty">指数模块未加载</p>'; return; }
+    if (!IL.ready()) {
+      box.innerHTML = '<p class="arch-empty">正在载入指数数据…</p>';
+      IL.ensure().then(function () {
+        fillBenchSelect();
+        renderBenchMeta();
+        fillCmpBase();
+        renderCmpIndexList();
+      }).catch(function (e) {
+        box.innerHTML = '<p class="arch-empty">指数数据加载失败：' + esc(e && e.message ? e.message : e) + '</p>';
+      });
+      return;
+    }
+    box.innerHTML = '';
+    IL.groups().forEach(function (g) {
+      box.appendChild(el('div', 'cmp-index-group', g.group));
+      g.items.forEach(function (it) {
+        var key = 'idx:' + it.code;
+        var on = !!selectedOf(key);
+        var row = el('label', 'cmp-index-item' + (on ? ' on' : ''));
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = on;
+        cb.addEventListener('change', function () { toggleCmpIndex(it.code, cb.checked); });
+        row.appendChild(cb);
+        row.appendChild(el('span', 'cmp-index-name', it.name));
+        row.appendChild(el('span', 'cmp-index-code', it.code));
+        box.appendChild(row);
+      });
+    });
+  }
+
+  /* 超额基线下拉：第一只产品 / 已上传基准 / 任意内置指数 */
+  function fillCmpBase() {
+    var sel = $('cmpBase');
+    if (!sel) return;
+    var cur = cmp.baseline || 'first';
+    sel.innerHTML = '';
+    var first = document.createElement('option');
+    first.value = 'first';
+    first.textContent = '第一只产品';
+    sel.appendChild(first);
+
+    if (state.benchmark) {
+      var ob = document.createElement('option');
+      ob.value = 'bench';
+      ob.textContent = '已有基准：' + shortLabel(state.benchName || '基准', 12);
+      sel.appendChild(ob);
+    }
+    if (IL && IL.ready()) {
+      IL.groups().forEach(function (g) {
+        var og = document.createElement('optgroup');
+        og.label = g.group;
+        g.items.forEach(function (it) {
+          var o = document.createElement('option');
+          o.value = 'idx:' + it.code;
+          o.textContent = it.name;
+          og.appendChild(o);
+        });
+        sel.appendChild(og);
+      });
+    }
+    var keep = false;
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === cur) { keep = true; break; }
+    }
+    sel.value = keep ? cur : 'first';
+    cmp.baseline = sel.value;
   }
 
   function shortLabel(s, n) {
@@ -1309,9 +1752,9 @@
     $('cmpEmpty').hidden = false;
     $('cmpEmptyTitle').textContent = title;
     $('cmpEmptyText').textContent = text;
-    $('cmpSummary').textContent = cmp.selected.length ? ('已选 ' + cmp.selected.length + ' 只') : '尚未选择';
+    $('cmpSummary').textContent = cmp.selected.length ? ('已选 ' + cmp.selected.length + ' 个') : '尚未选择';
     $('cmpSub').textContent = cmp.records.length
-      ? '从左侧勾选档案开始对比'
+      ? '从左侧勾选档案或内置指数开始对比'
       : '档案为空，先拖入 Excel 分析并存档';
     $('cmpWarn').hidden = true;
   }
@@ -1325,8 +1768,21 @@
     }
     var items = [];
     var notLoaded = [];
+    var needIndex = false;
     cmp.selected.forEach(function (s) {
-      var L = cmp.loaded[s.key];
+      if (s.kind === 'index') {
+        if (!IL || !IL.ready()) { needIndex = true; return; }
+        var ser = IL.series(s.code, false);
+        if (!ser) return;
+        items.push({
+          key: s.key,
+          name: ser.name,
+          isIndex: true,
+          series: { ts: ser.ts, nav: ser.nav, labels: [] }
+        });
+        return;
+      }
+      var L = cmp.loaded[s.baseKey || s.key];
       if (!L) { notLoaded.push(s); return; }
       if (!L.ok || !L.products.length) return;
       var p = L.products[Math.min(s.productIdx, L.products.length - 1)] || L.products[0];
@@ -1338,6 +1794,18 @@
         series: { ts: p.ts, nav: p.nav, labels: p.labels }
       });
     });
+
+    if (needIndex) {
+      showCmpEmpty('正在载入指数数据…', '首次使用内置指数需下载约 0.7MB，之后走浏览器缓存。');
+      IL.ensure().then(function () {
+        fillBenchSelect();
+        fillCmpBase();
+        if (cmp.open) rebuildCompare();
+      }).catch(function (e) {
+        showCmpEmpty('指数数据加载失败', (e && e.message) || '请确认 assets/indices.js 存在');
+      });
+      return;
+    }
 
     if (notLoaded.length) {
       showCmpEmpty('正在解析档案…', '首次读取需要一点时间，稍候会自动出结果。');
@@ -1352,19 +1820,32 @@
       if (items.length === 0) {
         showCmpEmpty('这些档案里没有可用的净值序列', '换一份档案，或先在单产品分析里确认能正常出图。');
       } else if (cmp.selected.length === 1) {
-        showCmpEmpty('再选 1 只就能开始对比', '已经选好 1 只，再从左侧勾选一只即可。');
+        showCmpEmpty('再选 1 个对象就能开始对比', '已经选好 1 个，再从左侧勾选一只产品或一条指数即可。');
       } else {
-        showCmpEmpty('可用产品不足 2 只', '有的档案解析失败，请检查后重试。');
+        showCmpEmpty('可用对象不足 2 个', '有的档案解析失败，请检查后重试。');
       }
       return;
+    }
+
+    // 超额基线：第一只产品 / 已上传基准 / 任意内置指数
+    var bench = null, baseline = 'first';
+    if (cmp.baseline === 'bench' && state.benchmark) {
+      bench = state.benchmark;
+      baseline = 'bench';
+    } else if (cmp.baseline && cmp.baseline.indexOf('idx:') === 0 && IL && IL.ready()) {
+      var bs = IL.series(cmp.baseline.slice(4), false);
+      if (bs) {
+        bench = { name: bs.name, ts: bs.ts, nav: bs.nav };
+        baseline = 'bench';
+      }
     }
 
     makeCmpLabels(items);
     var res = CMP.build(items, {
       rf: state.rf,
       align: cmp.align,
-      baseline: cmp.baseline,
-      bench: state.benchmark
+      baseline: baseline,
+      bench: bench
     });
     cmp.result = res;
     if (!res.ok) {
@@ -1393,7 +1874,7 @@
     var thead = document.createElement('thead');
     var gr = el('tr', 'cmp-group');
     gr.appendChild(el('th', null, ''));
-    var g1 = el('th', null, '收益与风险（各自完整区间）');
+    var g1 = el('th', null, '收益与风险（产品各自区间 · 指数共同区间）');
     g1.colSpan = res.cols.length;
     gr.appendChild(g1);
     var g2 = el('th', null, '区间收益');
@@ -1411,7 +1892,7 @@
     var tb = el('tbody');
     res.items.forEach(function (it) {
       var m = it.metrics;
-      var tr = el('tr');
+      var tr = el('tr', it.isIndex ? 'cmp-row-index' : '');
 
       var tdName = el('td');
       var box = el('div', 'cmp-name');
@@ -1421,6 +1902,7 @@
       var nm = el('span', 'cmp-nm-txt', it.name);
       nm.title = it.name;
       box.appendChild(nm);
+      if (it.isIndex) box.appendChild(el('span', 'cmp-index-badge', '指数'));
       tdName.appendChild(box);
       tdName.appendChild(el('div', 'cmp-range', (m ? m.start : '') + ' ~ ' + (m ? m.end : '')));
       tr.appendChild(tdName);
@@ -1449,11 +1931,14 @@
     $('cmpEmpty').hidden = true;
     $('cmpResult').hidden = false;
 
-    $('cmpSummary').textContent = '已选 ' + res.items.length + ' 只 · '
+    $('cmpSummary').textContent = '已选 ' + res.items.length + ' 个 · '
       + (res.align === 'common'
         ? ('共同区间 ' + res.start + ' 至 ' + res.end + ' · ' + res.points + ' 期')
         : ('各自起点 · 合并 ' + res.points + ' 个日期'));
-    $('cmpSub').textContent = '无风险利率 ' + pct(state.rf) + ' · 指标按各自完整区间计算';
+    var prodCount = res.items.length - (res.indexCount || 0);
+    $('cmpSub').textContent = '无风险利率 ' + pct(state.rf)
+      + (prodCount ? ' · 产品按各自完整区间' : '')
+      + (res.hasIndex ? ' · 指数按共同区间' : '');
 
     var warn = $('cmpWarn');
     if (res.warnings && res.warnings.length) {
@@ -1463,8 +1948,9 @@
       warn.hidden = true;
     }
 
-    $('cmpNavNote').textContent = res.align === 'common'
-      ? '起点归一为 1（共同区间）' : '各自起点归一为 1';
+    $('cmpNavNote').textContent = (res.align === 'common'
+      ? '起点归一为 1（共同区间）' : '各自起点归一为 1')
+      + (res.hasIndex ? ' · 指数为虚线' : '');
     $('cmpExcessNote').textContent = '相对「' + res.excess.baseName + '」· 0 轴为持平';
 
     renderCmpTable(res);
@@ -1573,6 +2059,11 @@
         .catch(function (e) { toast('打开失败：' + (e && e.message ? e.message : e)); });
     });
     $('btnMigrate').addEventListener('click', migrateArchives);
+    $('btnRecentAll').addEventListener('click', openArchive);
+    $('btnRecentRefresh').addEventListener('click', function () {
+      updateArchCount();
+      toast('已刷新最近上传');
+    });
 
     // 业绩对比
     $('btnCompare').addEventListener('click', function () {
@@ -1585,8 +2076,18 @@
     });
     $('cmpClear').addEventListener('click', function () {
       cmp.selected = [];
+      cmp.baseline = 'first';
       renderCmpList();
+      renderCmpIndexList();
+      fillCmpBase();
       rebuildCompare();
+    });
+    $('cmpIndexToggle').addEventListener('click', function () {
+      cmp.indexOpen = !cmp.indexOpen;
+      $('cmpIndexList').hidden = !cmp.indexOpen;
+      this.textContent = cmp.indexOpen ? '收起' : '展开';
+      this.setAttribute('aria-expanded', cmp.indexOpen ? 'true' : 'false');
+      renderCmpIndexList();
     });
     var segBtns = document.querySelectorAll('#cmpAlign .seg-btn');
     for (var si = 0; si < segBtns.length; si++) {
@@ -1601,13 +2102,16 @@
       })(segBtns[si]);
     }
     $('cmpBase').addEventListener('change', function () {
-      if (this.value === 'bench' && !state.benchmark) {
-        toast('还没有载入基准，先在单产品分析里上传基准文件');
-        this.value = 'first';
-        cmp.baseline = 'first';
-      } else {
-        cmp.baseline = this.value;
+      var v = this.value;
+      if (v === 'bench' && !state.benchmark) {
+        toast('还没有载入基准，先在单产品分析里选择内置指数或上传文件');
+        v = 'first';
+      } else if (v.indexOf('idx:') === 0 && !(IL && IL.ready())) {
+        toast('指数数据还在加载，稍后再试');
+        v = 'first';
       }
+      this.value = v;
+      cmp.baseline = v;
       rebuildCompare();
     });
     $('cmpRf').addEventListener('change', function () {
@@ -1723,13 +2227,35 @@
       if (f) loadBenchmark(f);
       e.target.value = '';
     });
-    $('btnClearBench').addEventListener('click', function () {
-      state.benchmark = null; state.benchName = '';
-      state.benchM = null; state.prodAlignM = null;
-      renderBenchPanel();
-      render(false);
-      toast('已移除基准');
-    });
+    $('btnClearBench').addEventListener('click', function () { clearBenchmark(); });
+
+    // 内置指数：点开下拉才懒加载数据包
+    var benchSel = $('benchIndex');
+    if (benchSel) {
+      ['mousedown', 'focus', 'keydown'].forEach(function (evt) {
+        benchSel.addEventListener(evt, function () { ensureBenchLib(); });
+      });
+      benchSel.addEventListener('change', function () {
+        var code = this.value;
+        if (!code) { clearBenchmark(true); return; }
+        var pair = IL && IL.pair(code);
+        var wantTr = !!state.benchTr && !!(pair && pair.tr);
+        useBuiltinIndex(code, wantTr);
+      });
+    }
+    var benchMode = $('benchMode');
+    if (benchMode) {
+      Array.prototype.forEach.call(benchMode.querySelectorAll('.seg-btn'), function (btn) {
+        btn.addEventListener('click', function () {
+          if (btn.disabled) return;
+          var wantTr = btn.getAttribute('data-tr') === '1';
+          if (state.benchSource !== 'index' || !state.benchCode) return;
+          var pair = IL && IL.pair(state.benchCode);
+          if (wantTr && !(pair && pair.tr)) { toast('这条指数暂无全收益数据'); return; }
+          useBuiltinIndex(state.benchCode, wantTr);
+        });
+      });
+    }
 
     // 导出
     $('btnExportCsv').addEventListener('click', exportCsv);
@@ -1783,6 +2309,9 @@
           if (!found) { toast('基准文件里没有找到净值序列'); return; }
           state.benchmark = found;
           state.benchName = found.name + '（' + file.name + '）';
+          state.benchCode = '';
+          state.benchTr = false;
+          state.benchSource = 'upload';
           renderBenchPanel();
           render(false);
           toast('已载入基准：' + found.name);
@@ -1810,7 +2339,7 @@
     ['单期 95% VaR', '期收益分布的 5% 分位数，表示最差 5% 情形下的单期亏损幅度。', 'VaR = quantile(r, 5%)'],
     ['区间收益', '以最新净值为锚向前推 N 个月，取 ≤ 目标日期的最后一个净值。今年来以上年末最后一个净值为基。', 'r = NAV_last / NAV_target - 1'],
     ['年度 / 月度收益', '年度以上年末最后一个净值为基数；月度以相邻月末净值为基数，缺失月份显示为空白。', 'r = NAV_end / NAV_base - 1'],
-    ['超额收益', '产品与基准在共同日期交集上对齐后重算，超额年化为复利差值口径。', 'excess_ann = (1 + ann_p) / (1 + ann_b) - 1'],
+    ['超额收益', '产品与基准按「最近交易日」对齐后重算（默认回溯 10 个自然日内取前值），超额年化为复利差值口径。', 'excess_ann = (1 + ann_p) / (1 + ann_b) - 1'],
     ['相对最大回撤', '以「产品 / 基准」比值序列计算历史最高比值的最大跌幅，衡量跑输基准的最深程度。', 'ratio_t = NAV_p,t / NAV_b,t，再对其求回撤'],
     ['数据安全', '页面为纯前端实现，Excel 在浏览器内解析，不上传任何服务器，断网亦可用。', '']
   ];
@@ -1887,6 +2416,7 @@
   function init() {
     renderGlossary();
     bind();
+    renderBenchPanel();
     setupInstall();
     if (isWeChat()) {
       toast('微信内打开功能受限：点右上角「…」选择「在浏览器打开」，可正常选择 Excel 文件');

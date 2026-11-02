@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="assets/style.css?v=20261030e">
+<link rel="stylesheet" href="assets/style.css?v=20261102o">
 </head>
 <body>
 
@@ -214,14 +214,24 @@
 
         <div class="card side-card">
           <div class="card-head tight"><h3>基准对比</h3></div>
+          <div class="bench-pick">
+            <select id="benchIndex" aria-label="选择内置指数">
+              <option value="">选择内置指数…</option>
+            </select>
+            <div class="seg seg-sm" id="benchMode" hidden>
+              <button type="button" class="seg-btn is-on" data-tr="0">价格</button>
+              <button type="button" class="seg-btn" data-tr="1">全收益</button>
+            </div>
+            <p class="bench-meta" id="benchMeta">沪深300 / 中证2000 / 国证2000 等</p>
+          </div>
           <div class="bench-drop" id="benchDrop" tabindex="0" role="button">
             <span class="bench-plus" aria-hidden="true">+</span>
-            <span id="benchText">上传基准序列（Excel / CSV）</span>
+            <span id="benchText">上传自有基准（Excel / CSV）</span>
             <input type="file" id="benchInput" accept=".xlsx,.xls,.csv" hidden>
           </div>
           <div class="bench-result" id="benchResult" hidden></div>
           <button class="btn ghost full" id="btnClearBench" type="button" hidden>移除基准</button>
-          <p class="side-note">按共同日期交集对齐后重算，超额年化为复利差值口径。</p>
+          <p class="side-note">按最近交易日对齐后重算，超额年化为复利差值口径；比含分红的指数请切「全收益」。</p>
         </div>
 
         <div class="card side-card">
@@ -253,6 +263,19 @@
       </aside>
     </div>
   </section>
+
+  <!-- ============ 最近上传 ============ -->
+  <section id="recentState" class="card recent-card" hidden>
+    <div class="card-head">
+      <h3>最近上传</h3>
+      <span class="card-hint" id="recentHint">点一行即可载入分析</span>
+    </div>
+    <div class="recent-list" id="recentList"></div>
+    <div class="recent-foot">
+      <button class="btn ghost sm" id="btnRecentRefresh" type="button">刷新</button>
+      <button class="btn ghost sm" id="btnRecentAll" type="button">查看全部档案</button>
+    </div>
+  </section>
 </main>
 
 <!-- ============ 业绩对比视图 ============ -->
@@ -268,7 +291,16 @@
         <input type="search" id="cmpSearch" placeholder="搜索档案名 / 产品名">
       </div>
       <div class="cmp-list" id="cmpList"></div>
-      <p class="side-note">勾选 2~6 份档案；每份档案可下拉切换成里面的其他产品。</p>
+
+      <div class="cmp-index-box">
+        <div class="cmp-index-head">
+          <span>内置指数</span>
+          <button class="btn ghost xs" id="cmpIndexToggle" type="button" aria-expanded="false">展开</button>
+        </div>
+        <div class="cmp-index-list" id="cmpIndexList" hidden></div>
+      </div>
+
+      <p class="side-note">勾选 2~6 个对象；每份档案可下拉切换成里面的其他产品。指数与产品同图，用虚线区分。</p>
     </aside>
 
     <div class="cmp-main">
@@ -323,7 +355,7 @@
         <div class="card">
           <div class="card-head">
             <h3>指标横向对比</h3>
-            <span class="card-hint">按年化收益排序，各列最优已标出</span>
+            <span class="card-hint">产品按年化收益排序；指数指标按共同区间计算，不参与最优标注</span>
           </div>
           <div class="cmp-table-wrap">
             <table class="cmp-table" id="cmpTable"></table>
@@ -432,13 +464,14 @@
 
 <script src="lib/xlsx.full.min.js"></script>
 <script src="lib/echarts.min.js"></script>
-<script src="assets/demo-data.js?v=20261030e"></script>
-<script src="assets/parser.js?v=20261030e"></script>
-<script src="assets/metrics.js?v=20261030e"></script>
-<script src="assets/charts.js?v=20261030e"></script>
-<script src="assets/archive.js?v=20261030e"></script>
-<script src="assets/compare.js?v=20261030e"></script>
-<script src="assets/ui.js?v=20261030e"></script>
+<script src="assets/demo-data.js?v=20261102o"></script>
+<script src="assets/parser.js?v=20261102o"></script>
+<script src="assets/metrics.js?v=20261102o"></script>
+<script src="assets/charts.js?v=20261102o"></script>
+<script src="assets/archive.js?v=20261102o"></script>
+<script src="assets/compare.js?v=20261102o"></script>
+<script src="assets/bench.js?v=20261102o"></script>
+<script src="assets/ui.js?v=20261102o"></script>
 <script>
 /* 离线缓存：仅在线（https）形态注册，本机 file:// 与 127.0.0.1 调试时不注册，避免改文件后被缓存挡住 */
 (function () {
