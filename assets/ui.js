@@ -32,6 +32,9 @@
     alignSkipped: 0,
     alignStart: null,
     alignEnd: null,
+    ddEpisodes: [],
+    benchAligned: null,
+    styleExp: null,
     demo: false,
     archiveMode: 'none',
     recentCount: 0,
@@ -139,6 +142,15 @@
     state.demo = !!isDemo;
     state.override = {};
     state.productIdx = 0;
+    state.styleExp = null;
+    // 换文件后预览表回到折叠态，避免旧表格误导
+    if ($('previewBody')) {
+      $('previewBody').hidden = true;
+      if ($('btnPreviewToggle')) {
+        $('btnPreviewToggle').textContent = '展开';
+        $('btnPreviewToggle').setAttribute('aria-expanded', 'false');
+      }
+    }
     state.from = null;
     state.to = null;
     state.benchmark = null;
@@ -163,6 +175,7 @@
     }
     if (picked < 0) {
       busy(false);
+      if ($('previewCard')) $('previewCard').hidden = true;
       toast((firstRes && firstRes.error) || '没有在这个文件里找到净值序列');
       return;
     }
@@ -304,9 +317,12 @@
     var m = M.compute(series, { rf: state.rf, from: state.from, to: state.to });
     if (!m.ok) { toast(m.error); return; }
     state.metrics = m;
+    // 回撤明细始终覆盖全部净值，不随区间选择缩水
+    state.ddEpisodes = M.drawdownEpisodes(p.ts, p.nav, { top: 5 });
 
     state.benchM = null;
     state.prodAlignM = null;
+    state.benchAligned = null;
     if (state.benchmark) {
       var al = M.alignBenchmark(series, state.benchmark, { toleranceDays: 10 });
       if (al) {
@@ -321,6 +337,7 @@
           state.alignSkipped = al.skippedBefore || 0;
           state.alignStart = al.ts[0];
           state.alignEnd = al.ts[al.ts.length - 1];
+          state.benchAligned = { ts: al.bench.ts, nav: al.bench.nav };
         } else {
           toast('所选区间内与基准的重叠点不足 2 个');
         }
@@ -333,8 +350,256 @@
     renderKpis(m, animate);
     renderPeriods(m);
     renderDetail(m);
+    renderDrawdownTable();
     renderBenchPanel();
+    renderStylePanel();
     renderCharts(m);
+    renderPreview();
+  }
+
+  /* ---------------- 回撤明细 ---------------- */
+  function valAt(series, t) {
+    if (!series || !series.ts || !series.ts.length) return null;
+    var lo = 0, hi = series.ts.length - 1, ans = -1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (series.ts[mid] <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return ans >= 0 ? series.nav[ans] : null;
+  }
+
+  function focusRange(fromTs, toTs) {
+    var p = state.result.products[state.productIdx];
+    var lo = p.ts[0], hi = p.ts[p.ts.length - 1];
+    fromTs = Math.max(lo, Math.min(fromTs, hi));
+    toTs = Math.max(lo, Math.min(toTs, hi));
+    if (fromTs >= toTs) { toast('区间太短，无法聚焦'); return; }
+    state.from = fromTs;
+    state.to = toTs;
+    $('rngFrom').value = dstr(fromTs);
+    $('rngTo').value = dstr(toTs);
+    render(false);
+    toast('已聚焦 ' + dstr(fromTs) + ' 至 ' + dstr(toTs));
+    var nav = $('chartNav');
+    if (nav && nav.scrollIntoView) nav.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function renderDrawdownTable() {
+    var card = $('ddTopCard');
+    var tbody = $('ddTbody');
+    if (!card || !tbody) return;
+    var eps = state.ddEpisodes || [];
+    if (!eps.length) {
+      card.hidden = true;
+      tbody.innerHTML = '';
+      return;
+    }
+    card.hidden = false;
+    tbody.innerHTML = '';
+    var hasBench = !!(state.benchAligned && state.benchAligned.ts.length);
+    var lastTs = state.result.products[state.productIdx].ts.slice(-1)[0];
+
+    eps.forEach(function (e, i) {
+      var tr = el('tr');
+      tr.title = '点击聚焦 ' + e.peakDate + ' 至 ' + (e.recoverDate || dstr(lastTs));
+      tr.appendChild(el('td', 'dd-idx', String(i + 1)));
+      tr.appendChild(el('td', 'dd-range', e.peakDate + ' → ' + e.troughDate));
+      tr.appendChild(el('td', 'num neg', pct(e.depth)));
+      tr.appendChild(el('td', 'num', e.dropDays + ' 天'));
+      tr.appendChild(el('td', e.ongoing ? 'dd-ongoing' : '',
+        e.ongoing ? '未修复' : (e.recoverDate + '（' + e.recoverDays + ' 天）')));
+
+      var btxt = '—';
+      if (hasBench) {
+        var v0 = valAt(state.benchAligned, e.peakTs);
+        var v1 = valAt(state.benchAligned, e.troughTs);
+        if (v0 > 0 && v1 > 0) btxt = pct(v1 / v0 - 1);
+      }
+      tr.appendChild(el('td', 'num', btxt));
+
+      tr.addEventListener('click', function () {
+        focusRange(e.peakTs, e.recoverTs || lastTs);
+      });
+      tbody.appendChild(tr);
+    });
+  }
+
+  /* ---------------- 数据预览与列角色 ----------------
+   * 表格直接读 parseFile 保留的原始 rows，列头下拉改「用途」后
+   * 组装成 analyze 的 override（日期列 / 产品列 / 净值列 / 忽略列）立即重算。
+   */
+  var ROLE_OPTS = [
+    { value: 'date', label: '日期' },
+    { value: 'product', label: '产品名' },
+    { value: 'nav', label: '净值' },
+    { value: 'ignore', label: '忽略' }
+  ];
+  var PV_COLS = 12, PV_ROWS = 20;
+
+  function previewRoles() {
+    var res = state.result, roles = {};
+    if (!res) return roles;
+    var long = res.structure === 'long';
+    res.columns.forEach(function (c) {
+      var i = c.index;
+      if (i === res.dateCol) roles[i] = 'date';
+      else if (long && i === res.productCol) roles[i] = 'product';
+      else if (long && i === res.navCol) roles[i] = 'nav';
+      else if (!long && res.navCols && res.navCols.indexOf(i) >= 0) roles[i] = 'nav';
+      else roles[i] = 'ignore';
+    });
+    return roles;
+  }
+
+  /* 角色 → override；失败返回 false 并提示 */
+  function applyRoles(roles) {
+    var res = state.result;
+    if (!res) return false;
+    var long = res.structure === 'long';
+    var dateCol = -1, prodCol = -1, navs = [], ign = [];
+    res.columns.forEach(function (c) {
+      var role = roles[c.index];
+      if (role === 'date' && dateCol < 0) dateCol = c.index;
+      else if (role === 'product' && prodCol < 0) prodCol = c.index;
+      else if (role === 'nav') navs.push(c.index);
+      else ign.push(c.index);
+    });
+    if (dateCol < 0) { toast('至少要有一列标为「日期」'); return false; }
+    if (!navs.length) { toast('至少要有一列标为「净值」'); return false; }
+    if (long && prodCol < 0) { toast('长表至少要有一列标为「产品名」'); return false; }
+
+    var ov = { dateCol: dateCol, mode: long ? 'long' : 'auto', ignoreCols: ign };
+    if (long) {
+      ov.productCol = prodCol;
+      ov.navCol = navs[0];
+      if (navs.length > 1) toast('长表只按一列净值分组，已使用「' + res.columns[navs[0]].label + '」');
+    } else {
+      ov.navCol = navs.length === 1 ? navs[0] : -1;
+      ov.navCols = navs;
+    }
+    return applyOverride(ov);
+  }
+
+  /* 统一入口：应用 override → 保持分析对象 → 重置区间 → 重渲染 */
+  function applyOverride(ov) {
+    var prevName = (state.result && state.result.products[state.productIdx])
+      ? state.result.products[state.productIdx].name : null;
+    var r = P.analyze(state.sheets[state.sheetIdx].rows, ov);
+    if (!r.ok) {
+      toast(r.error);
+      renderPreview();
+      return false;
+    }
+    state.override = ov;
+    state.result = r;
+    var idx = -1;
+    if (prevName) {
+      for (var i = 0; i < r.products.length; i++) {
+        if (r.products[i].name === prevName) { idx = i; break; }
+      }
+    }
+    if (idx < 0 && prevName) toast('原分析对象不在新映射里，已切到「' + r.products[0].name + '」');
+    state.productIdx = idx < 0 ? 0 : idx;
+    state.styleExp = null;
+    resetRangeInputs();
+    renderMapping();
+    render(false);
+    return true;
+  }
+
+  function renderPreview() {
+    var card = $('previewCard'), body = $('previewBody'), table = $('previewTable');
+    var note = $('previewNote');
+    if (!card || !body || !table) return;
+    if (!state.result || !state.sheets.length) { card.hidden = true; return; }
+    card.hidden = false;
+    if (body.hidden) return;                    // 折叠时不动 DOM，避免输入失焦
+
+    var sheet = state.sheets[state.sheetIdx];
+    var rows = (sheet && sheet.rows) || [];
+    var res = state.result;
+    var roles = previewRoles();
+    var cols = res.columns.slice(0, PV_COLS);
+    var start = res.headerRow >= 0 ? res.headerRow + 1 : 0;
+
+    table.innerHTML = '';
+    var thead = document.createElement('thead');
+    var trHead = document.createElement('tr');
+    var trRole = document.createElement('tr');
+    cols.forEach(function (c) {
+      var role = roles[c.index];
+      var th = el('th', 'pv-head' + (role === 'date' ? ' pv-date-col' : (role === 'product' ? ' pv-prod-col' : '')));
+      th.textContent = c.label;
+      th.title = c.label + '（第 ' + (c.index + 1) + ' 列）';
+      trHead.appendChild(th);
+
+      var thRole = el('th', 'pv-role-th' + (role === 'ignore' ? ' pv-dim-col' : ''));
+      var sel = document.createElement('select');
+      sel.className = 'pv-role';
+      sel.setAttribute('data-col', String(c.index));
+      sel.setAttribute('aria-label', c.label + ' 的用途');
+      ROLE_OPTS.forEach(function (o) {
+        var op = document.createElement('option');
+        op.value = o.value;
+        op.textContent = o.label;
+        if (o.value === role) op.selected = true;
+        sel.appendChild(op);
+      });
+      sel.addEventListener('change', function () {
+        roles[c.index] = sel.value;
+        if (!applyRoles(roles)) renderPreview();   // 失败时把下拉还原成实际生效的角色
+      });
+      thRole.appendChild(sel);
+      trRole.appendChild(thRole);
+    });
+    thead.appendChild(trHead);
+    thead.appendChild(trRole);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    var end = Math.min(rows.length, start + PV_ROWS);
+    for (var r = start; r < end; r++) {
+      var row = rows[r] || [];
+      var tr = document.createElement('tr');
+      cols.forEach(function (c) {
+        var v = row[c.index];
+        var role = roles[c.index];
+        var isDate = role === 'date' || c.index === res.dateCol;
+        var txt = '';
+        if (v !== null && v !== undefined && v !== '') {
+          if (isDate) {
+            var pd = P.parseDate(v);
+            txt = pd ? pd.text : String(v);
+          } else {
+            txt = String(v);
+          }
+        }
+        var td = el('td', (isDate ? 'pv-date' : '') + (role === 'ignore' ? ' pv-dim' : ''));
+        td.textContent = txt;
+        tr.appendChild(td);
+      });
+      if (roles[res.dateCol] === 'ignore') tr.className = 'pv-dim-row';
+      tbody.appendChild(tr);
+    }
+    if (!tbody.children.length) {
+      var tr0 = document.createElement('tr');
+      var td0 = el('td', 'pv-empty', '没有可预览的数据行');
+      td0.colSpan = Math.max(1, cols.length);
+      tr0.appendChild(td0);
+      tbody.appendChild(tr0);
+    }
+    table.appendChild(tbody);
+
+    if (note) {
+      var sName = { wide: '宽表', long: '长表', single: '单序列' }[res.structure] || '已识别';
+      var ignN = 0;
+      for (var k in roles) if (roles[k] === 'ignore') ignN++;
+      note.textContent = '共 ' + res.columns.length + ' 列、' + (res.totalRows || rows.length) + ' 行'
+        + (res.columns.length > PV_COLS ? '；此处只显示前 ' + PV_COLS + ' 列' : '')
+        + '。识别为「' + sName + '」，当前得到 ' + res.products.length + ' 条净值序列'
+        + (ignN ? '，忽略 ' + ignN + ' 列' : '')
+        + '。改列用途会立即重算，不用重新上传。';
+    }
   }
 
   /* ---------------- SVG 迷你走势 ---------------- */
@@ -653,6 +918,18 @@
     return n;
   }
 
+  /* 内置指数数据过期天数（本地日历日差） */
+  function staleDays(s) {
+    if (!s) return null;
+    var p = String(s).split('-');
+    if (p.length !== 3) return null;
+    var d = Date.UTC(+p[0], +p[1] - 1, +p[2]);
+    if (!isFinite(d)) return null;
+    var now = new Date();
+    var today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    return Math.floor((today - d) / DAY);
+  }
+
   function renderBenchMeta() {
     var meta = $('benchMeta');
     if (!meta) return;
@@ -661,11 +938,17 @@
       meta.textContent = '内置指数首次使用需载入数据（约 0.7 MB，之后走缓存）';
       return;
     }
-    var txt = indexCount() + ' 条指数 · 数据截至 ' + (IL.updated() || '—');
+    var upd = IL.updated();
+    var txt = indexCount() + ' 条指数 · 数据截至 ' + (upd || '—');
     if (state.benchSource === 'index' && state.benchmark) {
       txt += ' · 已对齐 ' + (state.alignPoints || 0) + ' 点';
     }
     meta.textContent = txt;
+    var sd = staleDays(upd);
+    if (sd !== null && sd > 30) {
+      meta.appendChild(el('span', 'meta-warn',
+        ' · 指数数据已 ' + sd + ' 天未更新，运行 tools/fetch_indices.py 后重新发布可更新'));
+    }
   }
 
   function renderBenchPanel() {
@@ -777,6 +1060,174 @@
 
   function benchRow(k, v, cls) {
     return '<div class="bench-row"><span>' + esc(k) + '</span><b class="' + (cls || '') + '">' + esc(v) + '</b></div>';
+  }
+
+  /* ---------------- 风格暴露：三因子周频回归 ----------------
+   * 产品净值按自然周取最后一个点，指数同样取周频，再用共同周算周收益；
+   * 缺口周（不是相邻周）不计，避免两三周的收益被当成一周。
+   */
+  var STYLE_FACTORS = [
+    { code: '000300', name: '沪深300' },
+    { code: '000852', name: '中证1000' },
+    { code: '932000', name: '中证2000' }
+  ];
+  var STYLE_MIN_WEEKS = 30;
+
+  function weekKey(ts) {
+    // 1970-01-01 是周四，+3 天后按 7 天切片，使每周起点落在周一
+    return Math.floor((Math.floor(ts / DAY) + 3) / 7);
+  }
+
+  function weeklyLast(ts, nav) {
+    var out = [], curK = null, curV = null;
+    for (var i = 0; i < ts.length; i++) {
+      if (!(nav[i] > 0)) continue;
+      var k = weekKey(ts[i]);
+      if (curK === null) { curK = k; curV = nav[i]; continue; }
+      if (k !== curK) {
+        out.push({ k: curK, v: curV });
+        curK = k;
+      }
+      curV = nav[i];
+    }
+    if (curK !== null) out.push({ k: curK, v: curV });
+    return out;
+  }
+
+  function computeStyle() {
+    var res = state.result;
+    if (!res) return null;
+    var p = res.products[state.productIdx];
+    if (!p) return null;
+
+    var wk = weeklyLast(p.ts, p.nav);
+    if (wk.length < 8) return { ok: false, reason: 'few', weeks: wk.length };
+
+    var pmap = {}, i;
+    wk.forEach(function (w) { pmap[w.k] = w.v; });
+
+    var fmaps = [], names = [];
+    for (i = 0; i < STYLE_FACTORS.length; i++) {
+      var s = IL.series(STYLE_FACTORS[i].code, false);
+      if (!s) return { ok: false, reason: 'no-index', name: STYLE_FACTORS[i].name };
+      var fm = {};
+      weeklyLast(s.ts, s.nav).forEach(function (w) { fm[w.k] = w.v; });
+      fmaps.push(fm);
+      names.push(s.name || STYLE_FACTORS[i].name);
+    }
+
+    var ys = [], xs = [];
+    for (i = 1; i < wk.length; i++) {
+      var k0 = wk[i - 1].k, k1 = wk[i].k;
+      if (k1 - k0 !== 1) continue;
+      var ok = true;
+      for (var f = 0; f < fmaps.length; f++) {
+        if (!(fmaps[f][k0] > 0) || !(fmaps[f][k1] > 0)) { ok = false; break; }
+      }
+      if (!ok) continue;
+      var fac = [];
+      for (var g = 0; g < fmaps.length; g++) fac.push(fmaps[g][k1] / fmaps[g][k0] - 1);
+      ys.push(pmap[k1] / pmap[k0] - 1);
+      xs.push(fac);
+    }
+    if (ys.length < 8) return { ok: false, reason: 'few', weeks: ys.length, names: names };
+
+    var rg = M.regress(ys, xs);
+    if (!rg) return { ok: false, reason: 'singular', weeks: ys.length, names: names };
+
+    var alphaAnn = (1 + rg.alpha) > 0 ? Math.pow(1 + rg.alpha, 52) - 1 : null;
+    return {
+      ok: true, n: rg.n, r2: rg.r2, betas: rg.betas,
+      alphaWeek: rg.alpha, alphaAnn: alphaAnn, resid: rg.residStd, names: names
+    };
+  }
+
+  function styleVerdict(d) {
+    var r2 = d.r2 === null ? 0 : d.r2;
+    var small = d.betas[1] + d.betas[2];
+    var big = d.betas[0];
+    if (r2 >= 0.6) {
+      if (small >= 0.6 && small > big) return 'R² 较高，收益主要由小微盘风格解释（中证1000 + 中证2000 Beta 合计 ' + small.toFixed(2) + '）。';
+      if (big >= 0.6) return 'R² 较高，收益主要跟随大盘（沪深300 Beta ' + big.toFixed(2) + '），风格偏核心资产。';
+      return 'R² 较高，三因子能解释大部分波动，但没有单一主导风格（Beta 合计 ' + (big + small).toFixed(2) + '）。';
+    }
+    if (r2 >= 0.3) return 'R² 中等，三因子只能解释一部分收益，其余大概率来自选股或择时。';
+    return 'R² 偏低，收益与大盘 / 中小盘指数的关系弱，更像绝对收益或低相关策略。';
+  }
+
+  function styleMetaItem(k, v) {
+    var d = el('div', 'style-meta-item');
+    d.appendChild(el('span', '', k));
+    d.appendChild(el('b', '', v));
+    return d;
+  }
+
+  function renderStylePanel() {
+    var card = $('styleCard');
+    if (!card) return;
+    if (!state.result) { card.hidden = true; return; }
+    var p = state.result.products[state.productIdx];
+    if (!p) { card.hidden = true; return; }
+    card.hidden = false;
+
+    var grid = $('styleBetas'), meta = $('styleMeta'), note = $('styleNote'), btn = $('btnStyleRun');
+
+    if (!IL || !IL.ready()) {
+      if (grid) grid.hidden = true;
+      if (meta) meta.hidden = true;
+      if (btn) { btn.disabled = false; btn.textContent = '载入并计算'; }
+      if (note) note.textContent = '首次使用需载入内置指数数据（约 0.7 MB，之后走缓存）。';
+      return;
+    }
+
+    var key = [p.name, state.from || 0, state.to || 0, IL.updated()].join('|');
+    if (!state.styleExp || state.styleExp.key !== key) {
+      state.styleExp = { key: key, data: computeStyle() };
+    }
+    var d = state.styleExp.data;
+    if (btn) { btn.disabled = false; btn.textContent = '重新计算'; }
+
+    if (!d || !d.ok) {
+      if (grid) { grid.hidden = true; grid.innerHTML = ''; }
+      if (meta) meta.hidden = true;
+      if (!note) return;
+      if (d && d.reason === 'few') {
+        note.textContent = '周频样本只有 ' + (d.weeks || 0) + ' 个（需 ≥ ' + STYLE_MIN_WEEKS + ' 周），暂不给出 Beta，避免看起来精确但没意义。';
+      } else if (d && d.reason === 'singular') {
+        note.textContent = '三个因子在这段区间高度共线，回归无解；可把区间拉长再试。';
+      } else if (d && d.reason === 'no-index') {
+        note.textContent = '内置指数里没有「' + d.name + '」，无法做三因子回归。';
+      } else {
+        note.textContent = '这段数据暂时算不出风格暴露。';
+      }
+      return;
+    }
+
+    if (d.n < STYLE_MIN_WEEKS) {
+      if (grid) grid.hidden = true;
+      if (meta) meta.hidden = true;
+      if (note) note.textContent = '有效周频样本只有 ' + d.n + ' 个（需 ≥ ' + STYLE_MIN_WEEKS + ' 周），样本不足，暂不给 Beta 估计。';
+      return;
+    }
+
+    if (grid) {
+      grid.innerHTML = '';
+      d.names.forEach(function (nm, i) {
+        var cell = el('div', 'beta-cell');
+        cell.appendChild(el('span', 'beta-name', nm));
+        cell.appendChild(el('b', 'beta-val', d.betas[i].toFixed(2)));
+        grid.appendChild(cell);
+      });
+      grid.hidden = false;
+    }
+    if (meta) {
+      meta.innerHTML = '';
+      meta.appendChild(styleMetaItem('R²', d.r2 === null ? '—' : d.r2.toFixed(2)));
+      meta.appendChild(styleMetaItem('样本', d.n + ' 周'));
+      meta.appendChild(styleMetaItem('年化 Alpha', d.alphaAnn === null ? '—' : pct(d.alphaAnn)));
+      meta.hidden = false;
+    }
+    if (note) note.textContent = styleVerdict(d);
   }
 
   /* ---------------- 图表 ---------------- */
@@ -893,6 +1344,17 @@
       rows.push(['超额累计', pct((1 + pm2.totalReturn) / (1 + bm.totalReturn) - 1)]);
       rows.push(['超额年化', pct((1 + pm2.annualized) / (1 + bm.annualized) - 1)]);
       rows.push(['相对最大回撤', pct(relativeDD(pm2.nav, bm.nav))]);
+    }
+
+    if (state.ddEpisodes && state.ddEpisodes.length) {
+      rows.push(['', '']);
+      rows.push(['回撤明细（全区间前 5 段）', '']);
+      state.ddEpisodes.forEach(function (e, i) {
+        rows.push(['第 ' + (i + 1) + ' 段', e.peakDate + ' → ' + e.troughDate
+          + ' · ' + pct(e.depth)
+          + ' · 下跌 ' + e.dropDays + ' 天 · '
+          + (e.ongoing ? '尚未修复' : '修复 ' + e.recoverDays + ' 天（' + e.recoverDate + '）')]);
+      });
     }
     return rows;
   }
@@ -1322,6 +1784,11 @@
     filter: '',
     rfDirty: false,   // 对比视图改过无风险利率，回到单产品视图时要重算
     mem: [],          // 当前文件的内存数据源（不落盘）
+    pfOpen: false,
+    pfWeights: {},
+    pfTouched: {},
+    pfItem: null,
+    pfDirty: false,
     result: null
   };
 
@@ -1368,6 +1835,7 @@
     syncRfInputs();
     fillCmpBase();
     if (cmp.indexOpen) renderCmpIndexList();
+    if (cmp.pfOpen) renderPfPanel(true);
     // 对比页是明确的「要比一比」动作，这里后台补一次指数数据，让超额基线下拉完整
     if (IL && !IL.ready()) {
       IL.ensure().then(function () {
@@ -1400,7 +1868,9 @@
 
   function updateCmpCount() {
     var c = $('cmpCount');
-    if (c) c.textContent = cmp.selected.length + ' / ' + CMP.MAX_ITEMS;
+    if (!c) return;
+    var n = cmp.selected.length + (cmp.pfItem ? 1 : 0);
+    c.textContent = n + ' / ' + CMP.MAX_ITEMS;
   }
 
   function renderCmpList() {
@@ -1428,6 +1898,7 @@
     }
     rows.forEach(function (r) { box.appendChild(cmpItem(r)); });
     updateCmpCount();
+    if (cmp.pfOpen) renderPfPanel(false);
   }
 
   function selectedOf(key) {
@@ -1557,6 +2028,7 @@
       rebuildCompare();
     });
     renderCmpList();
+    renderPfPanel(false);
     updateCmpCount();
     rebuildCompare();
   }
@@ -1582,6 +2054,7 @@
       });
     }
     renderCmpList();
+    renderPfPanel(false);
     updateCmpCount();
     rebuildCompare();
   }
@@ -1691,6 +2164,169 @@
         box.appendChild(row);
       });
     });
+  }
+
+  /* ---------------- 对比页：组合净值 ---------------- */
+  function pfMembers() {
+    var out = [], seen = {};
+    cmp.selected.forEach(function (s) {
+      if (s.kind === 'index') return;
+      var L = cmp.loaded[s.baseKey || s.key];
+      if (!L || !L.ok || !L.products.length) return;
+      var p = L.products[Math.min(s.productIdx || 0, L.products.length - 1)];
+      if (!p || seen[p.name]) return;     // 同一只产品只进组合一次
+      seen[p.name] = 1;
+      out.push({ key: s.key, name: p.name, series: p });
+    });
+    return out;
+  }
+
+  function pfSum() {
+    var sum = 0;
+    pfMembers().forEach(function (m) { sum += (+cmp.pfWeights[m.key] || 0); });
+    return sum;
+  }
+
+  function updatePfSum() {
+    var s = $('cmpPfSum');
+    if (s) s.textContent = '合计 ' + pfSum().toFixed(1) + '%';
+  }
+
+  function renderPfCur() {
+    var box = $('cmpPfCur');
+    if (!box) return;
+    if (!cmp.pfItem) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = '';
+    box.appendChild(el('span', 'cmp-pf-badge', cmp.pfItem.name));
+    if (cmp.pfDirty) box.appendChild(el('span', 'cmp-pf-warn', '权重已改，点「生成组合」更新'));
+    var del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'btn ghost xs';
+    del.textContent = '移除';
+    del.addEventListener('click', function () {
+      cmp.pfItem = null;
+      cmp.pfDirty = false;
+      renderPfCur();
+      updateCmpCount();
+      rebuildCompare();
+    });
+    box.appendChild(del);
+  }
+
+  function renderPfPanel(force) {
+    var box = $('cmpPfList');
+    if (!box) return;
+    var members = pfMembers();
+
+    if (cmp.pfItem) {
+      var nowKeys = members.map(function (m) { return m.key; }).join('|');
+      if (nowKeys !== cmp.pfItem.memberKeys) {
+        cmp.pfItem = null;
+        cmp.pfDirty = false;
+        renderPfCur();
+        updateCmpCount();
+        if (cmp.open) rebuildCompare();
+        toast('组合成员有变化，请重新生成组合');
+      }
+    }
+
+    var sig = members.map(function (m) { return m.key + '|' + m.name; }).join(';');
+    if (!force && box.getAttribute('data-sig') === sig) {
+      updatePfSum();
+      return;
+    }
+    box.setAttribute('data-sig', sig);
+
+    // 没手动改过的成员随人数自动等权，改过的保留
+    var even = Math.round(1000 / Math.max(1, members.length)) / 10;
+    members.forEach(function (m) {
+      if (!cmp.pfTouched[m.key]) cmp.pfWeights[m.key] = even;
+    });
+    Object.keys(cmp.pfWeights).forEach(function (k) {
+      if (!members.some(function (m) { return m.key === k; })) {
+        delete cmp.pfWeights[k];
+        delete cmp.pfTouched[k];
+      }
+    });
+
+    box.innerHTML = '';
+    if (!members.length) {
+      box.appendChild(el('p', 'arch-empty', '先在上方勾选产品，再回来配权重'));
+    }
+    members.forEach(function (m) {
+      var row = el('div', 'cmp-pf-row');
+      row.appendChild(el('span', 'cmp-pf-name', m.name));
+      var w = el('span', 'cmp-pf-w');
+      var inp = document.createElement('input');
+      inp.type = 'number';
+      inp.min = '0';
+      inp.step = '5';
+      inp.value = String(Math.round((+cmp.pfWeights[m.key] || 0) * 10) / 10);
+      inp.addEventListener('input', function () {
+        var v = parseFloat(inp.value);
+        cmp.pfWeights[m.key] = isFinite(v) && v > 0 ? v : 0;
+        cmp.pfTouched[m.key] = true;
+        cmp.pfDirty = !!cmp.pfItem;
+        updatePfSum();
+        renderPfCur();
+      });
+      w.appendChild(inp);
+      w.appendChild(el('span', 'cmp-pf-pct', '%'));
+      row.appendChild(w);
+      box.appendChild(row);
+    });
+    updatePfSum();
+    renderPfCur();
+  }
+
+  function buildPortfolio() {
+    var members = pfMembers();
+    if (members.length < 2) { toast('至少选 2 只不同产品才能生成组合'); return; }
+    if (cmp.selected.length >= CMP.MAX_ITEMS) {
+      toast('已选满 ' + CMP.MAX_ITEMS + ' 个，组合会超出上限，先取消一个');
+      return;
+    }
+    var sum = pfSum();
+    if (!(sum > 0)) { toast('权重合计需大于 0'); return; }
+
+    var dates = members[0].series.ts.slice();
+    for (var i = 1; i < members.length; i++) {
+      var set = {};
+      for (var j = 0; j < members[i].series.ts.length; j++) set[members[i].series.ts[j]] = 1;
+      dates = dates.filter(function (t) { return set[t] === 1; });
+    }
+    if (dates.length < 2) { toast('这些成员之间没有共同净值日期'); return; }
+
+    var nav = new Array(dates.length);
+    for (var k = 0; k < dates.length; k++) nav[k] = 0;
+    var used = 0;
+    members.forEach(function (m) {
+      var s = { ts: m.series.ts, nav: m.series.nav };
+      var base = valAt(s, dates[0]);
+      var w = (+cmp.pfWeights[m.key] || 0) / sum;
+      if (!(base > 0) || !(w > 0)) return;
+      used++;
+      for (var q = 0; q < dates.length; q++) nav[q] += w * (valAt(s, dates[q]) / base);
+    });
+    if (used < 2) { toast('至少需要 2 个有效权重'); return; }
+
+    cmp.pfItem = {
+      key: 'pf',
+      name: '组合（' + used + ' 只）',
+      memberKeys: members.map(function (m) { return m.key; }).join('|'),
+      members: members.map(function (m) { return m.name; }),
+      series: { ts: dates, nav: nav, labels: [] }
+    };
+    cmp.pfDirty = false;
+    renderPfCur();
+    updateCmpCount();
+    rebuildCompare();
+    toast('已生成组合：' + used + ' 只，权重已归一');
   }
 
   /* 超额基线下拉：第一只产品 / 已上传基准 / 任意内置指数 */
@@ -1815,6 +2451,15 @@
       return;
     }
 
+    if (cmp.pfItem && cmp.pfItem.series) {
+      items.push({
+        key: 'pf',
+        name: cmp.pfItem.name,
+        isPortfolio: true,
+        series: cmp.pfItem.series
+      });
+    }
+
     if (items.length < 2) {
       cmp.result = null;
       if (items.length === 0) {
@@ -1903,6 +2548,7 @@
       nm.title = it.name;
       box.appendChild(nm);
       if (it.isIndex) box.appendChild(el('span', 'cmp-index-badge', '指数'));
+      if (it.isPortfolio) box.appendChild(el('span', 'cmp-index-badge', '组合'));
       tdName.appendChild(box);
       tdName.appendChild(el('div', 'cmp-range', (m ? m.start : '') + ' ~ ' + (m ? m.end : '')));
       tr.appendChild(tdName);
@@ -2077,8 +2723,13 @@
     $('cmpClear').addEventListener('click', function () {
       cmp.selected = [];
       cmp.baseline = 'first';
+      cmp.pfItem = null;
+      cmp.pfDirty = false;
+      cmp.pfWeights = {};
+      cmp.pfTouched = {};
       renderCmpList();
       renderCmpIndexList();
+      renderPfPanel(true);
       fillCmpBase();
       rebuildCompare();
     });
@@ -2089,6 +2740,14 @@
       this.setAttribute('aria-expanded', cmp.indexOpen ? 'true' : 'false');
       renderCmpIndexList();
     });
+    $('cmpPfToggle').addEventListener('click', function () {
+      cmp.pfOpen = !cmp.pfOpen;
+      $('cmpPfBody').hidden = !cmp.pfOpen;
+      this.textContent = cmp.pfOpen ? '收起' : '展开';
+      this.setAttribute('aria-expanded', cmp.pfOpen ? 'true' : 'false');
+      if (cmp.pfOpen) renderPfPanel(true);
+    });
+    $('cmpPfBuild').addEventListener('click', buildPortfolio);
     var segBtns = document.querySelectorAll('#cmpAlign .seg-btn');
     for (var si = 0; si < segBtns.length; si++) {
       (function (b) {
@@ -2153,25 +2812,53 @@
       render(false);
     });
 
+    // 数据预览折叠
+    if ($('btnPreviewToggle')) {
+      $('btnPreviewToggle').addEventListener('click', function () {
+        var body = $('previewBody');
+        var open = body.hidden;
+        body.hidden = !open;
+        this.textContent = open ? '收起' : '展开';
+        this.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) renderPreview();
+      });
+    }
+
+    // 风格暴露
+    if ($('btnStyleRun')) {
+      $('btnStyleRun').addEventListener('click', function () {
+        if (!state.result) return;
+        state.styleExp = null;
+        if (IL && IL.ready()) { renderStylePanel(); return; }
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = '载入中…';
+        IL.ensure().then(function () {
+          fillBenchSelect();
+          renderBenchMeta();
+          renderStylePanel();
+        }).catch(function (e) {
+          btn.disabled = false;
+          btn.textContent = '载入并计算';
+          toast(e && e.message ? e.message : '指数数据加载失败');
+        });
+      });
+    }
+
     function remap() {
       var dateCol = +$('selDateCol').value;
       var navCol = +$('selNavCol').value;
       var isLong = state.result && state.result.structure === 'long';
+      // 保留预览表里设置的「忽略列」，但用户在这里明确挑的净值列不再忽略
+      var keep = (state.override && state.override.ignoreCols) ? state.override.ignoreCols.slice() : [];
+      if (navCol >= 0) {
+        var at = keep.indexOf(navCol);
+        if (at >= 0) keep.splice(at, 1);
+      }
       var ov = { dateCol: dateCol, navCol: navCol, mode: isLong ? 'long' : 'auto' };
       if (isLong && !$('selProdColWrap').hidden) ov.productCol = +$('selProdCol').value;
-      var prevName = state.result.products[state.productIdx] ? state.result.products[state.productIdx].name : null;
-      var r = P.analyze(state.sheets[state.sheetIdx].rows, ov);
-      if (!r.ok) { toast(r.error); return; }
-      state.override = ov;
-      state.result = r;
-      var idx = 0;
-      if (prevName) {
-        for (var i = 0; i < r.products.length; i++) if (r.products[i].name === prevName) { idx = i; break; }
-      }
-      state.productIdx = idx;
-      resetRangeInputs();
-      renderMapping();
-      render(false);
+      if (keep.length) ov.ignoreCols = keep;
+      applyOverride(ov);
     }
     $('selDateCol').addEventListener('change', remap);
     $('selNavCol').addEventListener('change', remap);

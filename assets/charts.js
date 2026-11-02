@@ -409,7 +409,11 @@
         symbol: 'circle',
         symbolSize: 5,
         sampling: 'lttb',
-        lineStyle: { width: s.dash ? 1.4 : 1.9, color: s.color, type: s.dash ? 'dashed' : 'solid' },
+        lineStyle: {
+          width: s.width || (s.dash ? 1.4 : 1.9),
+          color: s.color,
+          type: s.dash ? 'dashed' : 'solid'
+        },
         itemStyle: { color: s.color },
         emphasis: { focus: 'series' },
         z: s.dash ? 2 : 3

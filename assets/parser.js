@@ -303,6 +303,13 @@
     var droppedTotal = { bad: 0, dup: 0 };
     var warnings = [];
     var chosenNavCols = [];
+    var ignoreCols = [];
+    if (override.ignoreCols && override.ignoreCols.length) {
+      for (var ig = 0; ig < override.ignoreCols.length; ig++) {
+        var ic = +override.ignoreCols[ig];
+        if (ic >= 0) ignoreCols.push(ic);
+      }
+    }
 
     if (isLong) {
       var groups = {};
@@ -331,22 +338,33 @@
     } else {
       // 宽表 / 单序列
       var navCols = [];
-      if (override.navCol !== undefined && override.navCol !== null && override.navCol >= 0) {
+      if (override.navCol !== undefined && override.navCol !== null && override.navCol >= 0
+        && ignoreCols.indexOf(override.navCol) < 0) {
         navCols = [override.navCol];
       } else {
         var threshold = Math.max(2, dataRows * 0.5);
         for (var k = 0; k < width; k++) {
-          if (k === dateCol) continue;
+          if (k === dateCol || ignoreCols.indexOf(k) >= 0) continue;
           if (numCount[k] >= threshold) navCols.push(k);
         }
         if (!navCols.length) {
           var bestK = -1, bestN = 0;
           for (var k2 = 0; k2 < width; k2++) {
-            if (k2 === dateCol) continue;
+            if (k2 === dateCol || ignoreCols.indexOf(k2) >= 0) continue;
             if (numCount[k2] > bestN) { bestN = numCount[k2]; bestK = k2; }
           }
           if (bestK >= 0) navCols.push(bestK);
         }
+      }
+
+      // 明确指定了多列净值（预览表里逐列标了「净值」）：优先按用户意图，不受密度阈值过滤
+      if (override.navCols && override.navCols.length) {
+        var forced = [];
+        for (var ff = 0; ff < override.navCols.length; ff++) {
+          var fcc = +override.navCols[ff];
+          if (fcc >= 0 && fcc < width && fcc !== dateCol && ignoreCols.indexOf(fcc) < 0) forced.push(fcc);
+        }
+        if (forced.length) navCols = forced;
       }
 
       chosenNavCols = navCols;
@@ -394,6 +412,8 @@
       dateCol: dateCol,
       navCol: isLong ? navCol : (chosenNavCols.length ? chosenNavCols[0] : -1),
       productCol: isLong ? prodCol : -1,
+      ignoreCols: ignoreCols,
+      navCols: chosenNavCols,
       columns: columns,
       products: products,
       totalRows: rows.length,

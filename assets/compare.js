@@ -18,6 +18,7 @@
   var COLORS = ['#2E6FA7', '#C0392B', '#D89A2A', '#1E7B4F', '#7A6FA8', '#4C8FCB'];
   /* 指数配色偏灰/青，和产品实线区分 */
   var INDEX_COLORS = ['#5C6B7A', '#8194A8', '#8B7BB8', '#4F8C7C', '#A08850', '#7D8B6A'];
+  var PORTFOLIO_COLOR = '#243447';
   var MAX_ITEMS = 6;
   var MIN_COMMON = 30;
 
@@ -215,7 +216,7 @@
     COLS.forEach(function (c) {
       var win = null, winVal = null;
       items.forEach(function (it) {
-        if (it.isIndex) return;              // 最优只在产品之间比
+        if (it.isIndex || it.isPortfolio) return;   // 最优只在原始产品之间比
         var v = it.metrics ? it.metrics[c.key] : null;
         if (v === null || v === undefined || !isFinite(v)) return;
         if (winVal === null || (c.dir > 0 ? v > winVal : v < winVal)) { winVal = v; win = it.key; }
@@ -245,8 +246,11 @@
       }
       return {
         key: it.key, label: it.label, name: it.name,
-        color: it.color || (it.isIndex ? INDEX_COLORS[idx % INDEX_COLORS.length] : COLORS[idx % COLORS.length]),
+        color: it.color || (it.isIndex
+          ? INDEX_COLORS[idx % INDEX_COLORS.length]
+          : (it.isPortfolio ? PORTFOLIO_COLOR : COLORS[idx % COLORS.length])),
         isIndex: !!it.isIndex,
+        isPortfolio: !!it.isPortfolio,
         rec: it.rec, productIdx: it.productIdx, series: it.series, metrics: m.ok ? m : null
       };
     }).filter(function (it) {
@@ -305,8 +309,12 @@
     }
 
     // 排序：产品按年化收益降序在前，指数保持勾选顺序排在后面
-    var productItems = [], indexItems = [], sorted = [];
-    withMetrics.forEach(function (it) { (it.isIndex ? indexItems : productItems).push(it); });
+    var productItems = [], pfItems = [], indexItems = [];
+    withMetrics.forEach(function (it) {
+      if (it.isIndex) indexItems.push(it);
+      else if (it.isPortfolio) pfItems.push(it);
+      else productItems.push(it);
+    });
     productItems.sort(function (a, b) {
       var va = a.metrics ? a.metrics.annualized : null;
       var vb = b.metrics ? b.metrics.annualized : null;
@@ -315,8 +323,7 @@
       if (vb === null) return -1;
       return vb - va;
     });
-    sorted = productItems.concat(indexItems);
-    withMetrics = sorted;
+    withMetrics = productItems.concat(pfItems, indexItems);
 
     // 叠加图序列（time 轴）；指数用虚线＋专属配色
     var overlay = {
@@ -325,7 +332,11 @@
       series: withMetrics.map(function (it) {
         var pts = [];
         for (var i = 0; i < it.aligned.ts.length; i++) pts.push([it.aligned.ts[i], it.aligned.cum[i]]);
-        return { name: it.label, color: it.color, data: pts, dash: it.isIndex };
+        return {
+          name: it.label, color: it.color, data: pts,
+          dash: it.isIndex,
+          width: it.isPortfolio ? 2.8 : null
+        };
       })
     };
 
@@ -413,6 +424,7 @@
       heat: heat,
       hasIndex: indexItems.length > 0,
       indexCount: indexItems.length,
+      hasPortfolio: pfItems.length > 0,
       start: M.dstr(dates[0]),
       end: M.dstr(dates[dates.length - 1]),
       startTs: dates[0],

@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="assets/style.css?v=20261102o">
+<link rel="stylesheet" href="assets/style.css?v=20261102u">
 </head>
 <body>
 
@@ -104,6 +104,21 @@
       <div class="filebar-tags" id="fbTags"></div>
     </div>
 
+    <!-- ============ 数据预览与纠错 ============ -->
+    <section class="card preview-card2" id="previewCard" hidden>
+      <div class="card-head">
+        <h3>数据预览与纠错</h3>
+        <span class="card-hint">原始表格前 20 行 · 列头可改用途，改完立即重算</span>
+        <button class="btn ghost sm" id="btnPreviewToggle" type="button" aria-expanded="false">展开</button>
+      </div>
+      <div id="previewBody" hidden>
+        <div class="preview-scroll">
+          <table class="pv-table" id="previewTable"></table>
+        </div>
+        <p class="side-note" id="previewNote"></p>
+      </div>
+    </section>
+
     <div class="layout">
       <div class="main-col">
 
@@ -137,6 +152,28 @@
             </div>
           </div>
           <div class="chart chart-sm" id="chartDD"></div>
+        </div>
+
+        <div class="card dd-top-card" id="ddTopCard" hidden>
+          <div class="card-head">
+            <h3>回撤明细</h3>
+            <span class="card-hint">全区间前 5 段 · 点一行聚焦到该区间</span>
+          </div>
+          <div class="dd-table-wrap">
+            <table class="dd-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>区间（峰 → 谷）</th>
+                  <th class="num">深度</th>
+                  <th class="num">下跌</th>
+                  <th>修复</th>
+                  <th class="num">同期基准</th>
+                </tr>
+              </thead>
+              <tbody id="ddTbody"></tbody>
+            </table>
+          </div>
         </div>
 
         <div class="duo">
@@ -234,6 +271,16 @@
           <p class="side-note">按最近交易日对齐后重算，超额年化为复利差值口径；比含分红的指数请切「全收益」。</p>
         </div>
 
+        <div class="card side-card" id="styleCard" hidden>
+          <div class="card-head tight">
+            <h3>风格暴露（周频）</h3>
+            <button class="btn ghost sm" id="btnStyleRun" type="button">计算</button>
+          </div>
+          <div class="beta-grid" id="styleBetas" hidden></div>
+          <div class="style-meta" id="styleMeta" hidden></div>
+          <p class="side-note" id="styleNote">用沪深300、中证1000、中证2000 三因子做周频回归，判断收益是否主要来自小微盘风格。</p>
+        </div>
+
         <div class="card side-card">
           <div class="card-head tight">
             <h3>本地存档</h3>
@@ -292,6 +339,22 @@
       </div>
       <div class="cmp-list" id="cmpList"></div>
 
+      <div class="cmp-pf-box">
+        <div class="cmp-pf-head">
+          <span>组合净值</span>
+          <button class="btn ghost xs" id="cmpPfToggle" type="button" aria-expanded="false">展开</button>
+        </div>
+        <div class="cmp-pf-body" id="cmpPfBody" hidden>
+          <p class="side-note" id="cmpPfHint">从已选产品里挑 2 只以上，权重自动归一；期初权重、不做再平衡。</p>
+          <div class="cmp-pf-list" id="cmpPfList"></div>
+          <div class="cmp-pf-foot">
+            <span class="cmp-pf-sum" id="cmpPfSum">合计 0%</span>
+            <button class="btn primary sm" id="cmpPfBuild" type="button">生成组合</button>
+          </div>
+          <div class="cmp-pf-cur" id="cmpPfCur" hidden></div>
+        </div>
+      </div>
+
       <div class="cmp-index-box">
         <div class="cmp-index-head">
           <span>内置指数</span>
@@ -300,7 +363,7 @@
         <div class="cmp-index-list" id="cmpIndexList" hidden></div>
       </div>
 
-      <p class="side-note">勾选 2~6 个对象；每份档案可下拉切换成里面的其他产品。指数与产品同图，用虚线区分。</p>
+      <p class="side-note">勾选 2~6 个对象；同一份档案里的多只产品可分别勾选。指数用虚线，组合线加粗。</p>
     </aside>
 
     <div class="cmp-main">
@@ -464,14 +527,14 @@
 
 <script src="lib/xlsx.full.min.js"></script>
 <script src="lib/echarts.min.js"></script>
-<script src="assets/demo-data.js?v=20261102o"></script>
-<script src="assets/parser.js?v=20261102o"></script>
-<script src="assets/metrics.js?v=20261102o"></script>
-<script src="assets/charts.js?v=20261102o"></script>
-<script src="assets/archive.js?v=20261102o"></script>
-<script src="assets/compare.js?v=20261102o"></script>
-<script src="assets/bench.js?v=20261102o"></script>
-<script src="assets/ui.js?v=20261102o"></script>
+<script src="assets/demo-data.js?v=20261102u"></script>
+<script src="assets/parser.js?v=20261102u"></script>
+<script src="assets/metrics.js?v=20261102u"></script>
+<script src="assets/charts.js?v=20261102u"></script>
+<script src="assets/archive.js?v=20261102u"></script>
+<script src="assets/compare.js?v=20261102u"></script>
+<script src="assets/bench.js?v=20261102u"></script>
+<script src="assets/ui.js?v=20261102u"></script>
 <script>
 /* 离线缓存：仅在线（https）形态注册，本机 file:// 与 127.0.0.1 调试时不注册，避免改文件后被缓存挡住 */
 (function () {

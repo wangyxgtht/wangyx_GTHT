@@ -212,6 +212,7 @@
       ok: true,
       n: n,
       nObs: nObs,
+      ddEpisodes: drawdownEpisodes(ts, nav, { top: 5 }),
       days: days,
       years: years,
       periodsPerYear: periodsPerYear,
@@ -250,6 +251,137 @@
       nav: nav,
       r: r
     };
+  }
+
+  /* ---------------- 回撤分段 ----------------
+   * 从每个历史新高往下走，到「跌回去之前的某个峰值」为一段：
+   * 峰值 → 谷底 → 修复（或至今未修复）。按深度排序取前 N 段。
+   */
+  function drawdownEpisodes(ts, nav, opts) {
+    var o = opts || {};
+    var top = o.top || 5;
+    var minDepth = o.minDepth != null ? o.minDepth : 0.005;
+    var out = [];
+    if (!ts || !nav || ts.length < 2) return out;
+
+    var peakIdx = 0, peakNav = nav[0], i = 1;
+    while (i < nav.length) {
+      if (nav[i] >= peakNav) {
+        peakNav = nav[i];
+        peakIdx = i;
+        i++;
+        continue;
+      }
+      var troughIdx = i, troughNav = nav[i], j = i;
+      while (j < nav.length && nav[j] < peakNav) {
+        if (nav[j] < troughNav) { troughNav = nav[j]; troughIdx = j; }
+        j++;
+      }
+      var recovered = j < nav.length;
+      var depth = troughNav / peakNav - 1;
+      if (depth <= -minDepth) {
+        out.push({
+          peakTs: ts[peakIdx],
+          peakNav: peakNav,
+          troughTs: ts[troughIdx],
+          troughNav: troughNav,
+          depth: depth,
+          dropDays: Math.round((ts[troughIdx] - ts[peakIdx]) / DAY),
+          recoverTs: recovered ? ts[j] : null,
+          recoverDays: recovered ? Math.round((ts[j] - ts[troughIdx]) / DAY) : null,
+          ongoing: !recovered,
+          peakDate: dstr(ts[peakIdx]),
+          troughDate: dstr(ts[troughIdx]),
+          recoverDate: recovered ? dstr(ts[j]) : null
+        });
+      }
+      if (!recovered) break;
+      peakIdx = j;
+      peakNav = nav[j];
+      i = j + 1;
+    }
+
+    out.sort(function (a, b) { return a.depth - b.depth; });
+    return out.slice(0, top);
+  }
+
+  /* ---------------- 多因子回归 ----------------
+   * 最小二乘：y = α + Σ β_i·x_i + ε，正规方程 + 高斯消元（部分选主元）。
+   * ys: [y1..yn]；xs: [[x11,x12,x13], ...]；样本不足或矩阵奇异返回 null。
+   * 返回的 α 是「每期」Alpha（周频数据即周 Alpha），由调用方折年。
+   */
+  function regress(ys, xs) {
+    if (!ys || !xs || ys.length !== xs.length || !ys.length) return null;
+    var k = xs[0] ? xs[0].length : 0;
+    if (!k) return null;
+    var m = k + 1;                      // 截距 + k 个因子
+    var rows = [], i, j, r;
+
+    var A = [], b = [];
+    for (i = 0; i < m; i++) {
+      A.push(new Array(m).fill(0));
+      b.push(0);
+    }
+    for (r = 0; r < ys.length; r++) {
+      var x = xs[r];
+      if (!x || x.length !== k) continue;
+      if (!isFinite(ys[r])) continue;
+      var row = [1];
+      var bad = false;
+      for (j = 0; j < k; j++) {
+        if (!isFinite(x[j])) { bad = true; break; }
+        row.push(x[j]);
+      }
+      if (bad) continue;
+      rows.push(r);
+      for (i = 0; i < m; i++) {
+        b[i] += row[i] * ys[r];
+        for (j = 0; j < m; j++) A[i][j] += row[i] * row[j];
+      }
+    }
+    var n = rows.length;
+    if (n <= m) return null;
+
+    // 增广矩阵 + 部分选主元消元
+    var aug = [];
+    for (i = 0; i < m; i++) aug.push(A[i].concat(b[i]));
+    for (var col = 0; col < m; col++) {
+      var piv = col;
+      for (r = col + 1; r < m; r++) {
+        if (Math.abs(aug[r][col]) > Math.abs(aug[piv][col])) piv = r;
+      }
+      if (Math.abs(aug[piv][col]) < 1e-12) return null;   // 因子完全共线
+      if (piv !== col) { var tmp = aug[col]; aug[col] = aug[piv]; aug[piv] = tmp; }
+      var d = aug[col][col];
+      for (j = col; j <= m; j++) aug[col][j] /= d;
+      for (r = 0; r < m; r++) {
+        if (r === col) continue;
+        var f = aug[r][col];
+        if (!f) continue;
+        for (j = col; j <= m; j++) aug[r][j] -= f * aug[col][j];
+      }
+    }
+
+    var alpha = aug[0][m], betas = [];
+    for (i = 1; i < m; i++) betas.push(aug[i][m]);
+
+    // R² 与残差标准误
+    var my = 0;
+    for (i = 0; i < n; i++) my += ys[rows[i]];
+    my /= n;
+    var sse = 0, sst = 0;
+    for (i = 0; i < n; i++) {
+      var ti = rows[i];
+      var fit = alpha;
+      for (j = 0; j < k; j++) fit += betas[j] * xs[ti][j];
+      var e = ys[ti] - fit;
+      sse += e * e;
+      sst += (ys[ti] - my) * (ys[ti] - my);
+    }
+    var r2 = sst > 0 ? 1 - sse / sst : null;
+    var residStd = n > m ? Math.sqrt(sse / (n - m)) : null;
+
+    return { alpha: alpha, betas: betas, r2: r2, n: n, residStd: residStd, k: k };
   }
 
   /* ---------------- 基准对齐 ----------------
@@ -294,6 +426,8 @@
   NA.metrics = {
     compute: compute,
     alignBenchmark: alignBenchmark,
+    drawdownEpisodes: drawdownEpisodes,
+    regress: regress,
     dstr: dstr,
     subMonths: subMonths
   };
